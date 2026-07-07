@@ -6,13 +6,7 @@ import unicodedata
 import openpyxl
 from difflib import SequenceMatcher
 
-# Configuración de la página
-st.set_page_config(page_title="Consola Iris Cavazos", page_icon="🎛️", layout="wide")
-
-st.title("🎛️ Consola de Control de Materias e Inyección de NRCs")
-st.markdown("---")
-
-# ================= LÓGICA DE TU SCRIPT DE R =================
+# ================= 1. CONFIGURACIÓN Y FUNCIONES (DEBEN IR AQUÍ ARRIBA) =================
 HOJA_ALTAS = "ALTAS"
 UMBRAL_FUZZY = 0.72
 
@@ -31,6 +25,11 @@ if "original_files_bytes" not in st.session_state: st.session_state.original_fil
 if "df_corregido" not in st.session_state: st.session_state.df_corregido = None
 if "raw_altas" not in st.session_state: st.session_state.raw_altas = None
 if "res_auditoria" not in st.session_state: st.session_state.res_auditoria = None
+
+# Configuración de la página visual
+st.set_page_config(page_title="Consola Iris Cavazos", page_icon="🎛️", layout="wide")
+st.title("🎛️ Consola de Control de Materias e Inyección de NRCs")
+st.markdown("---")
 
 # Pestañas de Navegación
 tab1, tab2 = st.tabs(["1️⃣ Proceso: Validación y Generar CSV", "2️⃣ Proceso: Inyección de NRCs (ARGOS)"])
@@ -57,7 +56,7 @@ with tab1:
                 df_c = xls_cat.parse(hoja)
                 if "Nivel" in df_c.columns and "Materia" in df_c.columns:
                     for _, f in df_c.iterrows():
-                        niv = normalizer_para_cruce(f.get("Nivel"))
+                        niv = normalizar_para_cruce(f.get("Nivel"))
                         indice_cat.setdefault(niv, []).append({
                             "mat_norm": normalizer_para_cruce(f.get("Materia")), 
                             "subj": f.get("Subj"), 
@@ -67,11 +66,9 @@ with tab1:
             # Procesando cada archivo de Altas
             piezas = []
             for f in files_altas:
-                # REGLA 1: Extrae solo la primera palabra para el aviso en pantalla
                 primera_palabra = f.name.split()[0]
                 st.info(f"🔍 Checking / Revisando archivo: **{primera_palabra}**")
                 
-                # Guardar los bytes usando el nombre completo original
                 st.session_state.original_files_bytes[f.name] = f.getvalue()
                 
                 xls_a = pd.ExcelFile(f)
@@ -174,7 +171,6 @@ with tab1:
             st.session_state.df_corregido = corregido
             st.success("¡Cambios guardados! Descarga tus archivos .csv estructurados aquí abajo:")
             
-            # Generación del CSV mapeado idéntico a tu script de R
             for name, sub in corregido.groupby("ArchivoOrigen"):
                 resultado_df = pd.DataFrame()
                 
@@ -198,7 +194,6 @@ with tab1:
                                       "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION"]
                 resultado_df = resultado_df[columnas_ordenadas]
                 
-                # REGLA 2: Mantener el mismo nombre original pero cambiar la extensión a .csv
                 nombre_base = name.rsplit('.', 1)[0] if '.' in name else name
                 csv_filename = f"{nombre_base}.csv"
                 
@@ -279,7 +274,6 @@ with tab2:
                     wb.save(excel_buffer)
                     excel_buffer.seek(0)
                     
-                    # Conserva nombre original para el Excel con pestaña CRNs
                     nombre_base_excel = name.rsplit('.', 1)[0] if '.' in name else name
                     excel_filename = f"{nombre_base_excel} con hoja CRNs.xlsx"
                     
