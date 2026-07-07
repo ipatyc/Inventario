@@ -28,6 +28,7 @@ if "raw_altas" not in st.session_state: st.session_state.raw_altas = None
 if "res_auditoria" not in st.session_state: st.session_state.res_auditoria = None
 if "ready_for_download" not in st.session_state: st.session_state.ready_for_download = False
 if "zip_file_bytes" not in st.session_state: st.session_state.zip_file_bytes = None
+if "summary_csv_bytes" not in st.session_state: st.session_state.summary_csv_bytes = None
 if "csv_files_to_download" not in st.session_state: st.session_state.csv_files_to_download = {}
 
 # Configuración de la interfaz visual
@@ -143,7 +144,6 @@ with tab1:
             else:
                 st.error(f"❌ Ninguno de los archivos subidos tiene la pestaña '{HOJA_ALTAS}'")
 
-    # MESA DE CONTROL REDISEÑADA: AGRUPADA POR EXCEL, SIN DUPLICADOS NI CORRECTAS
     if st.session_state.res_auditoria is not None:
         st.markdown("### ⚖️ Mesa de Control Interactiva por Excel")
         
@@ -201,6 +201,11 @@ with tab1:
                     corregido.loc[row["idx"], "Course"] = row["Crse Sugerido"]
             
             st.session_state.df_corregido = corregido
+            
+            # Generar Archivo de Resumen para persistencia futura
+            summary_str = corregido.to_csv(index=False, encoding="utf-8-sig")
+            st.session_state.summary_csv_bytes = summary_str.encode("utf-8-sig")
+            
             st.session_state.csv_files_to_download = {}
             zip_buffer = io.BytesIO()
             
@@ -240,6 +245,16 @@ with tab1:
 
         if st.session_state.ready_for_download:
             st.markdown("### 📥 Panel de Descarga de Resultados")
+            
+            # EL NUEVO ARCHIVO SALVAVIDAS SOLICITADO POR IRIS
+            st.download_button(
+                label="📝 📥 DESCARGAR ARCHIVO DE RESUMEN PARA PESTAÑA 2 (.CSV)",
+                data=st.session_state.summary_csv_bytes,
+                file_name="resumen_proceso_1.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+            
             st.download_button(
                 label="💥 📥 DESCARGAR TODOS LOS CSVs JUNTOS (.ZIP)",
                 data=st.session_state.zip_file_bytes,
@@ -248,14 +263,6 @@ with tab1:
                 use_container_width=True,
                 type="primary"
             )
-            with st.expander("Descargar archivos individuales separados"):
-                for filename, data_bytes in st.session_state.csv_files_to_download.items():
-                    st.download_button(
-                        label=f"📥 Descargar {filename}",
-                        data=data_bytes,
-                        file_name=filename,
-                        mime="text/csv"
-                    )
 
 # ============================================================
 # PESTAÑA 2: INYECTAR EN REPORTE ARGOS (CONSTRUIR HOJA "CRNs")
@@ -263,73 +270,109 @@ with tab1:
 with tab2:
     st.header("Inyección de NRCs desde Reporte de ARGOS")
     
-    if st.session_state.df_corregido is None:
-        st.warning("⚠️ Primero debes completar el Proceso 1 (Validar, dar Luz Verde y Procesar) para poder usar esta pestaña.")
-    else:
-        file_argos = st.file_uploader("📊 Cargar Reporte de ARGOS (.csv)", type=["csv"])
+    # Evaluar si estamos en la misma sesión o en una sesión nueva (pasó mucho tiempo)
+    mismo_momento = st.session_state.df_corregido is not None
+    procesar_cruce = False
+    df_base_cruce = None
+    dict_bytes_altas = {}
+    file_argos = None
+    
+    if mismo_momento:
+        st.success("🧠 **Modo Instantáneo:** La app recuerda tus correcciones actuales de la Pestaña 1. Solo necesitas subir el reporte de ARGOS.")
+        file_argos = st.file_uploader("📊 Cargar Reporte de ARGOS (.csv)", type=["csv"], key="argos_directo")
         
         if file_argos:
-            if st.button("🚀 Cruzar Datos y Modificar Excels", type="primary"):
+            procesar_cruce = st.button("🚀 Cruzar Datos y Modificar Excels", type="primary", key="btn_directo")
+            if procesar_cruce:
+                df_base_cruce = st.session_state.df_corregido.copy()
+                dict_bytes_altas = st.session_state.original_files_bytes
+    else:
+        st.info("🕒 **Modo Asincrónico (Trabajo de otro día):** Como la app se reinició, no tienes que repetir la Pestaña 1. Sube el resumen descargado junto con tus archivos de ALTAS normales.")
+        
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            file_argos = st.file_uploader("📊 1. Cargar Reporte de ARGOS (.csv)", type=["csv"], key="argos_asinc")
+        with col_b:
+            file_resumen = st.file_uploader("📝 2. Cargar Archivo de Resumen (.csv)", type=["csv"])
+        with col_c:
+            files_altas_p2 = st.file_uploader("📁 3. Archivos de ALTAS (.xlsx)", accept_multiple_files=True, type=["xlsx"])
+            
+        if file_argos and file_resumen and files_altas_p2:
+            procesar_cruce = st.button("🚀 Cruzar Datos Directo (Usando Archivo Resumen)", type="primary", key="btn_asinc")
+            if procesar_cruce:
                 try:
-                    argos_df = pd.read_csv(file_argos, encoding="utf-8")
+                    df_base_cruce = pd.read_csv(file_resumen, encoding="utf-8")
                 except:
-                    argos_df = pd.read_csv(file_argos, encoding="latin-1")
+                    df_base_cruce = pd.read_csv(file_resumen, encoding="latin-1")
                 
-                st.info("Estandarizando llaves y realizando left_join de R...")
-                solicitud_p2 = st.session_state.df_corregido.copy()
+                for f in files_altas_p2:
+                    dict_bytes_altas[f.name] = f.getvalue()
+
+    # LOGICA DE CRUCE UNIFICADA
+    if procesar_cruce and df_base_cruce is not None:
+        try:
+            argos_df = pd.read_csv(file_argos, encoding="utf-8")
+        except:
+            argos_df = pd.read_csv(file_argos, encoding="latin-1")
+        
+        st.info("Estandarizando llaves y realizando left_join de R...")
+        solicitud_p2 = df_base_cruce.copy()
+        
+        solicitud_p2["_k_per"] = solicitud_p2["Periodo"].astype(str).str.strip()
+        solicitud_p2["_k_niv"] = solicitud_p2["Nivel"].apply(normalizar_para_cruce)
+        solicitud_p2["_k_sub"] = solicitud_p2["Subject"].apply(normalizar_para_cruce)
+        solicitud_p2["_k_crs"] = solicitud_p2["Course"].astype(str).str.strip()
+        
+        def pad_seccion(v):
+            try: return f"{int(float(str(v).strip())):02d}"
+            except: return str(v).strip()
+        solicitud_p2["_k_sec"] = solicitud_p2["Sección"].apply(pad_seccion)
+        
+        argos_df["_k_per"] = argos_df["Periodo"].astype(str).str.strip()
+        argos_df["_k_niv"] = argos_df["Nivel"].apply(normalizar_para_cruce)
+        argos_df["_k_sub"] = argos_df["Área"].apply(normalizar_para_cruce)
+        argos_df["_k_crs"] = argos_df["No..Curso"].astype(str).str.strip()
+        argos_df["_k_sec"] = argos_df["Grupo"].apply(pad_seccion)
+        
+        llaves_cruce = ["_k_per", "_k_niv", "_k_sub", "_k_crs", "_k_sec"]
+        
+        argos_subset = argos_df[llaves_cruce + ["NRC"]]
+        fusion = solicitud_p2.merge(argos_subset, on=llaves_cruce, how="left")
+        fusion.drop(columns=llaves_cruce, inplace=True)
+        
+        fusion = fusion.drop_duplicates(subset=["NRC"], keep="first")
+        columnas_finales = ["NRC"] + [c for c in fusion.columns if c != "NRC" and c != "ArchivoOrigen"]
+        
+        st.success("¡Cruce completado con éxito!")
+        st.markdown("#### 📥 Descarga tus Excels modificados con la pestaña 'CRNs':")
+        
+        for name, sub in fusion.groupby("ArchivoOrigen"):
+            if name in dict_bytes_altas:
+                df_escribir = sub[columnas_finales].copy()
+                original_bytes = dict_bytes_altas[name]
+                wb = openpyxl.load_workbook(io.BytesIO(original_bytes))
                 
-                solicitud_p2["_k_per"] = solicitud_p2["Periodo"].astype(str).str.strip()
-                solicitud_p2["_k_niv"] = solicitud_p2["Nivel"].apply(normalizar_para_cruce)
-                solicitud_p2["_k_sub"] = solicitud_p2["Subject"].apply(normalizar_para_cruce)
-                solicitud_p2["_k_crs"] = solicitud_p2["Course"].astype(str).str.strip()
+                if "CRNs" in wb.sheetnames:
+                    del wb["CRNs"]
                 
-                def pad_seccion(v):
-                    try: return f"{int(float(str(v).strip())):02d}"
-                    except: return str(v).strip()
-                solicitud_p2["_k_sec"] = solicitud_p2["Sección"].apply(pad_seccion)
+                ws = wb.create_sheet(title="CRNs")
+                ws.append(list(df_escribir.columns))
+                for r in df_escribir.values:
+                    ws.append(list(r))
                 
-                argos_df["_k_per"] = argos_df["Periodo"].astype(str).str.strip()
-                argos_df["_k_niv"] = argos_df["Nivel"].apply(normalizar_para_cruce)
-                argos_df["_k_sub"] = argos_df["Área"].apply(normalizar_para_cruce)
-                argos_df["_k_crs"] = argos_df["No..Curso"].astype(str).str.strip()
-                argos_df["_k_sec"] = argos_df["Grupo"].apply(pad_seccion)
+                excel_buffer = io.BytesIO()
+                wb.save(excel_buffer)
+                excel_buffer.seek(0)
                 
-                llaves_cruce = ["_k_per", "_k_niv", "_k_sub", "_k_crs", "_k_sec"]
+                nombre_base_excel = name.rsplit('.', 1)[0] if '.' in name else name
+                excel_filename = f"{nombre_base_excel} con hoja CRNs.xlsx"
                 
-                argos_subset = argos_df[llaves_cruce + ["NRC"]]
-                fusion = solicitud_p2.merge(argos_subset, on=llaves_cruce, how="left")
-                fusion.drop(columns=llaves_cruce, inplace=True)
-                
-                fusion = fusion.drop_duplicates(subset=["NRC"], keep="first")
-                columnas_finales = ["NRC"] + [c for c in fusion.columns if c != "NRC" and c != "ArchivoOrigen"]
-                
-                st.success("¡Cruce completado con éxito!")
-                st.markdown("#### 📥 Descarga tus Excels modificados con la pestaña 'CRNs':")
-                
-                for name, sub in fusion.groupby(st.session_state.df_corregido["ArchivoOrigen"]):
-                    df_escribir = sub[columnas_finales].copy()
-                    
-                    original_bytes = st.session_state.original_files_bytes[name]
-                    wb = openpyxl.load_workbook(io.BytesIO(original_bytes))
-                    
-                    if "CRNs" in wb.sheetnames:
-                        del wb["CRNs"]
-                    
-                    ws = wb.create_sheet(title="CRNs")
-                    ws.append(list(df_escribir.columns))
-                    for r in df_escribir.values:
-                        ws.append(list(r))
-                    
-                    excel_buffer = io.BytesIO()
-                    wb.save(excel_buffer)
-                    excel_buffer.seek(0)
-                    
-                    nombre_base_excel = name.rsplit('.', 1)[0] if '.' in name else name
-                    excel_filename = f"{nombre_base_excel} con hoja CRNs.xlsx"
-                    
-                    st.download_button(
-                        label=f"⬇️ Descargar {excel_filename}",
-                        data=excel_buffer.getvalue(),
-                        file_name=excel_filename,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                st.download_button(
+                    label=f"⬇️ Descargar {excel_filename}",
+                    data=excel_buffer.getvalue(),
+                    file_name=excel_filename,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"dl_{name}"
+                )
+            else:
+                st.warning(f"⚠️ El archivo '{name}' se detectó en el resumen, pero no se subió en el bloque de ALTAS de esta pestaña.")
