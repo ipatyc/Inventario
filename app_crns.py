@@ -85,8 +85,8 @@ with tab1:
                 # Auditoría fila por fila
                 resultados = []
                 for idx, fila in df_total.iterrows():
-                    niv_n = normalizer_para_cruce(fila.get("Nivel"))
-                    mat_n = normalizer_para_cruce(fila.get("Nombre de la Materia"))
+                    niv_n = normalizar_para_cruce(fila.get("Nivel"))
+                    mat_n = normalizar_para_cruce(fila.get("Nombre de la Materia"))
                     candidatos = indice_cat.get(niv_n, [])
                     
                     match = next((c for c in candidatos if c["mat_norm"] == mat_n), None)
