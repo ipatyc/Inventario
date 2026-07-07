@@ -9,7 +9,6 @@ from difflib import SequenceMatcher
 
 # ================= 1. CONFIGURACIÓN Y FUNCIONES ESTRUCTURALES =================
 HOJA_ALTAS = "ALTAS"
-UMBRAL_FUZZY = 0.82  # Máxima precisión factible configurada
 
 def quitar_acentos(t):
     if pd.isna(t) or t is None: return ""
@@ -17,9 +16,6 @@ def quitar_acentos(t):
 
 def normalizar_para_cruce(t):
     return quitar_acentos(str(t).upper().strip())
-
-def similitud(a, b): 
-    return SequenceMatcher(None, a, b).ratio()
 
 # Inicialización de estados en memoria de Streamlit
 if "original_files_bytes" not in st.session_state: st.session_state.original_files_bytes = {}
@@ -57,17 +53,15 @@ with tab1:
             
             xls_cat = pd.ExcelFile(file_cat)
             indice_cat = {}
+            # Crear un índice mapeando (Subj_Norm, Crse_Norm) -> Nombre Oficial de la Materia
             for hoja in xls_cat.sheet_names:
                 df_c = xls_cat.parse(hoja)
-                if "Nivel" in df_c.columns and "Materia" in df_c.columns:
+                if "Subj" in df_c.columns and "Crse" in df_c.columns and "Materia" in df_c.columns:
                     for _, f in df_c.iterrows():
-                        niv = normalizar_para_cruce(f.get("Nivel"))
-                        indice_cat.setdefault(niv, []).append({
-                            "mat_orig": str(f.get("Materia")).strip(),
-                            "mat_norm": normalizar_para_cruce(f.get("Materia")), 
-                            "subj": str(f.get("Subj")).strip(), 
-                            "crse": str(f.get("Crse")).strip()
-                        })
+                        s_norm = normalizar_para_cruce(f.get("Subj"))
+                        c_norm = str(f.get("Crse")).strip()
+                        key = (s_norm, c_norm)
+                        indice_cat[key] = str(f.get("Materia")).strip()
             
             piezas = []
             for f in files_altas:
@@ -88,58 +82,37 @@ with tab1:
                 
                 resultados = []
                 for idx, fila in df_total.iterrows():
-                    niv_n = normalizar_para_cruce(fila.get("Nivel"))
-                    mat_n = normalizar_para_cruce(fila.get("Nombre de la Materia"))
-                    subj_orig = str(fila.get("Subject")).strip()
-                    crse_orig = str(fila.get("Course")).strip()
+                    mat_excel = str(fila.get("Nombre de la Materia")).strip()
+                    subj_excel = str(fila.get("Subject")).strip()
+                    crse_excel = str(fila.get("Course")).strip()
                     
-                    candidatos = indice_cat.get(niv_n, [])
-                    matches_exactos = [c for c in candidatos if c["mat_norm"] == mat_n]
+                    s_excel_norm = normalizar_para_cruce(subj_excel)
+                    c_excel_norm = crse_excel
                     
-                    match_elegido = None
-                    tipo = "no_encontrado"
+                    llave_busqueda = (s_excel_norm, c_excel_norm)
                     
-                    if matches_exactos:
-                        tipo = "exacto"
-                        coincidencia_perfecta = next((m for m in matches_exactos if m["subj"] == subj_orig and m["crse"] == crse_orig), None)
-                        match_elegido = coincidencia_perfecta if coincidencia_perfecta else matches_exactos[0]
+                    # NUEVA LÓGICA PEDIDA POR IRIS: Buscar por Subj y Crse en el catálogo
+                    if llave_busqueda in indice_cat:
+                        mat_catalogo = indice_cat[llave_busqueda]
+                        
+                        # Comparar los nombres normalizados para ver si son la misma materia
+                        if normalizar_para_cruce(mat_excel) == normalizar_para_cruce(mat_catalogo):
+                            comentario = "Todo correcto"
+                        else:
+                            comentario = "Nombre de materia incorrecto"
                     else:
-                        mejor, mejor_s = None, -1.0
-                        for c in candidatos:
-                            s = similitud(mat_n, c["mat_norm"])
-                            if s > mejor_s: mejor_s, mejor = s, c
-                        if mejor and mejor_s >= UMBRAL_FUZZY:
-                            matches_fuzzy = [c for c in candidatos if c["mat_norm"] == mejor["mat_norm"]]
-                            coincidencia_perf_f = next((m for m in matches_fuzzy if m["subj"] == subj_orig and m["crse"] == crse_orig), None)
-                            tipo = "fuzzy"
-                            match_elegido = coincidencia_perf_f if coincidencia_perf_f else mejor
-                    
-                    subj_sug = match_elegido["subj"] if match_elegido else None
-                    crse_sug = match_elegido["crse"] if match_elegido else None
-                    mat_cat_nombre = match_elegido["mat_orig"] if match_elegido else "❌ No encontrada en catálogo"
-                    
-                    if tipo == "no_encontrado":
-                        comentario = "No se encontró en catálogo"
-                    elif subj_orig == subj_sug and crse_orig == crse_sug:
-                        comentario = "Todo correcto"
-                    elif subj_orig != subj_sug and crse_orig != crse_sug:
-                        comentario = "Subj y Crse incorrectos"
-                    elif subj_orig != subj_sug:
-                        comentario = "Subject incorrecto"
-                    else:
-                        comentario = "Course incorrecto"
+                        mat_catalogo = "❌ No encontrada en catálogo"
+                        comentario = "Claves (Subj/Crse) no encontradas"
                     
                     resultados.append({
-                        "Luz Verde": False,  # CAMBIO IRIS: Ninguna seleccionada por defecto
+                        "Luz Verde": False,  # Ninguna seleccionada por defecto
                         "idx": idx, 
                         "Archivo": fila.get("ArchivoOrigen"), 
-                        "Materia Excel": fila.get("Nombre de la Materia"), 
-                        "Materia Catálogo": mat_cat_nombre, # CAMBIO IRIS: Agregada columna catálogo
-                        "Comentario": comentario,
-                        "Subj Original": fila.get("Subject"), 
-                        "Crse Original": fila.get("Course"),
-                        "Subj Sugerido": subj_sug, 
-                        "Crse Sugerido": crse_sug
+                        "Subj": subj_excel,
+                        "Crse": crse_excel,
+                        "Materia Excel": mat_excel, 
+                        "Materia Catálogo": mat_catalogo, 
+                        "Comentario": comentario
                     })
                 
                 st.session_state.res_auditoria = pd.DataFrame(resultados)
@@ -165,20 +138,22 @@ with tab1:
                     quitar_rep = st.checkbox("🔍 Combinar repetidas (Ver solo 1 renglón por caso)", value=True, key=f"rep_{arch}")
                     
                     if quitar_rep:
-                        df_vista = errores_filas.drop_duplicates(subset=["Materia Excel", "Materia Catálogo", "Subj Original", "Crse Original", "Comentario"])
+                        df_vista = errores_filas.drop_duplicates(subset=["Subj", "Crse", "Materia Excel", "Materia Catálogo", "Comentario"])
                     else:
                         df_vista = errores_filas
                         
-                    columnas_vista = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
+                    columnas_vista = ["Luz Verde", "Subj", "Crse", "Materia Excel", "Materia Catálogo", "Comentario"]
                     
                     df_editado_archivo = st.data_editor(
                         df_vista[columnas_vista],
                         hide_index=True,
-                        disabled=["Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original"],
+                        disabled=["Subj", "Crse", "Materia Excel", "Materia Catálogo", "Comentario"],
                         column_config={
-                            "Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?", help="Marca para autorizar este cambio"),
+                            "Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?", help="Marca para autorizar mantener los datos del catálogo"),
+                            "Subj": st.column_config.TextColumn("Subj (Excel)", width="small"),
+                            "Crse": st.column_config.TextColumn("Crse (Excel)", width="small"),
                             "Materia Excel": st.column_config.TextColumn("Materia (Excel)", width="large"),
-                            "Materia Catálogo": st.column_config.TextColumn("Materia (Catálogo)", width="large"),
+                            "Materia Catálogo": st.column_config.TextColumn("Materia (Catálogo Oficial)", width="large"),
                             "Comentario": st.column_config.TextColumn("Diagnóstico", width="medium"),
                         },
                         key=f"editor_{arch}",
@@ -187,24 +162,19 @@ with tab1:
                     
                     for _, row in df_editado_archivo.iterrows():
                         mascara = (st.session_state.res_auditoria["Archivo"] == arch) & \
+                                  (st.session_state.res_auditoria["Subj"] == row["Subj"]) & \
+                                  (st.session_state.res_auditoria["Crse"] == row["Crse"]) & \
                                   (st.session_state.res_auditoria["Materia Excel"] == row["Materia Excel"]) & \
-                                  (st.session_state.res_auditoria["Materia Catálogo"] == row["Materia Catálogo"]) & \
-                                  (st.session_state.res_auditoria["Subj Original"] == row["Subj Original"]) & \
-                                  (st.session_state.res_auditoria["Crse Original"] == row["Crse Original"])
+                                  (st.session_state.res_auditoria["Materia Catálogo"] == row["Materia Catálogo"])
                         
                         st.session_state.res_auditoria.loc[mascara, "Luz Verde"] = row["Luz Verde"]
-                        st.session_state.res_auditoria.loc[mascara, "Subj Sugerido"] = row["Subj Sugerido"]
-                        st.session_state.res_auditoria.loc[mascara, "Crse Sugerido"] = row["Crse Sugerido"]
         
         st.markdown("---")
         if st.button("💾 Aplicar Cambios Autorizados y Procesar Todo", type="primary"):
             corregido = st.session_state.raw_altas.copy()
             
-            for _, row in st.session_state.res_auditoria.iterrows():
-                if row["Luz Verde"] and pd.notna(row["Subj Sugerido"]):
-                    corregido.loc[row["idx"], "Subject"] = row["Subj Sugerido"]
-                    corregido.loc[row["idx"], "Course"] = row["Crse Sugerido"]
-            
+            # Nota: Al procesar, si Iris da Luz Verde, se asume que se valida la fila.
+            # En este enfoque invertido, las claves ya están en el excel, por lo que el archivo base mantiene su Subj y Crse.
             st.session_state.df_corregido = corregido
             
             # Generar Archivo de Resumen para persistencia futura
