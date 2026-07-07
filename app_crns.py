@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 
 # ================= 1. CONFIGURACIÓN Y FUNCIONES ESTRUCTURALES =================
 HOJA_ALTAS = "ALTAS"
+UMBRAL_FUZZY = 0.82  # Precisión para búsqueda de nombres
 
 def quitar_acentos(t):
     if pd.isna(t) or t is None: return ""
@@ -16,6 +17,9 @@ def quitar_acentos(t):
 
 def normalizar_para_cruce(t):
     return quitar_acentos(str(t).upper().strip())
+
+def similitud(a, b): 
+    return SequenceMatcher(None, a, b).ratio()
 
 # Inicialización de estados en memoria de Streamlit
 if "original_files_bytes" not in st.session_state: st.session_state.original_files_bytes = {}
@@ -53,15 +57,17 @@ with tab1:
             
             xls_cat = pd.ExcelFile(file_cat)
             indice_cat = {}
-            # Crear un índice mapeando (Subj_Norm, Crse_Norm) -> Nombre Oficial de la Materia
             for hoja in xls_cat.sheet_names:
                 df_c = xls_cat.parse(hoja)
-                if "Subj" in df_c.columns and "Crse" in df_c.columns and "Materia" in df_c.columns:
+                if "Nivel" in df_c.columns and "Materia" in df_c.columns:
                     for _, f in df_c.iterrows():
-                        s_norm = normalizar_para_cruce(f.get("Subj"))
-                        c_norm = str(f.get("Crse")).strip()
-                        key = (s_norm, c_norm)
-                        indice_cat[key] = str(f.get("Materia")).strip()
+                        niv = normalizar_para_cruce(f.get("Nivel"))
+                        indice_cat.setdefault(niv, []).append({
+                            "mat_orig": str(f.get("Materia")).strip(),
+                            "mat_norm": normalizar_para_cruce(f.get("Materia")), 
+                            "subj": str(f.get("Subj")).strip(), 
+                            "crse": str(f.get("Crse")).strip()
+                        })
             
             piezas = []
             for f in files_altas:
@@ -82,37 +88,58 @@ with tab1:
                 
                 resultados = []
                 for idx, fila in df_total.iterrows():
-                    mat_excel = str(fila.get("Nombre de la Materia")).strip()
-                    subj_excel = str(fila.get("Subject")).strip()
-                    crse_excel = str(fila.get("Course")).strip()
+                    niv_n = normalizar_para_cruce(fila.get("Nivel"))
+                    mat_n = normalizar_para_cruce(fila.get("Nombre de la Materia"))
+                    subj_orig = str(fila.get("Subject")).strip()
+                    crse_orig = str(fila.get("Course")).strip()
                     
-                    s_excel_norm = normalizar_para_cruce(subj_excel)
-                    c_excel_norm = crse_excel
+                    candidatos = indice_cat.get(niv_n, [])
+                    matches_exactos = [c for c in candidatos if c["mat_norm"] == mat_n]
                     
-                    llave_busqueda = (s_excel_norm, c_excel_norm)
+                    match_elegido = None
+                    tipo = "no_encontrado"
                     
-                    # NUEVA LÓGICA PEDIDA POR IRIS: Buscar por Subj y Crse en el catálogo
-                    if llave_busqueda in indice_cat:
-                        mat_catalogo = indice_cat[llave_busqueda]
-                        
-                        # Comparar los nombres normalizados para ver si son la misma materia
-                        if normalizar_para_cruce(mat_excel) == normalizar_para_cruce(mat_catalogo):
-                            comentario = "Todo correcto"
-                        else:
-                            comentario = "Nombre de materia incorrecto"
+                    if matches_exactos:
+                        tipo = "exacto"
+                        coincidencia_perfecta = next((m for m in matches_exactos if m["subj"] == subj_orig and m["crse"] == crse_orig), None)
+                        match_elegido = coincidencia_perfecta if coincidencia_perfecta else matches_exactos[0]
                     else:
-                        mat_catalogo = "❌ No encontrada en catálogo"
-                        comentario = "Claves (Subj/Crse) no encontradas"
+                        mejor, mejor_s = None, -1.0
+                        for c in candidatos:
+                            s = similitud(mat_n, c["mat_norm"])
+                            if s > mejor_s: mejor_s, mejor = s, c
+                        if mejor and mejor_s >= UMBRAL_FUZZY:
+                            matches_fuzzy = [c for c in candidatos if c["mat_norm"] == mejor["mat_norm"]]
+                            coincidencia_perf_f = next((m for m in matches_fuzzy if m["subj"] == subj_orig and m["crse"] == crse_orig), None)
+                            tipo = "fuzzy"
+                            match_elegido = coincidencia_perf_f if coincidencia_perf_f else mejor
+                    
+                    subj_sug = match_elegido["subj"] if match_elegido else None
+                    crse_sug = match_elegido["crse"] if match_elegido else None
+                    mat_cat_nombre = match_elegido["mat_orig"] if match_elegido else "❌ No encontrada en catálogo"
+                    
+                    if tipo == "no_encontrado":
+                        comentario = "No se encontró en catálogo"
+                    elif subj_orig == subj_sug and crse_orig == crse_sug:
+                        comentario = "Todo correcto"
+                    elif subj_orig != subj_sug and crse_orig != crse_sug:
+                        comentario = "Subj y Crse incorrectos"
+                    elif subj_orig != subj_sug:
+                        comentario = "Subject incorrecto"
+                    else:
+                        comentario = "Course incorrecto"
                     
                     resultados.append({
-                        "Luz Verde": False,  # Ninguna seleccionada por defecto
+                        "Luz Verde": False,  # IRIS: Todo desmarcado por defecto
                         "idx": idx, 
                         "Archivo": fila.get("ArchivoOrigen"), 
-                        "Subj": subj_excel,
-                        "Crse": crse_excel,
-                        "Materia Excel": mat_excel, 
-                        "Materia Catálogo": mat_catalogo, 
-                        "Comentario": comentario
+                        "Materia Excel": fila.get("Nombre de la Materia"), 
+                        "Materia Catálogo": mat_cat_nombre, # IRIS: Columna agregada para comparar
+                        "Comentario": comentario,
+                        "Subj Original": fila.get("Subject"), 
+                        "Crse Original": fila.get("Course"),
+                        "Subj Sugerido": subj_sug, 
+                        "Crse Sugerido": crse_sug
                     })
                 
                 st.session_state.res_auditoria = pd.DataFrame(resultados)
@@ -138,23 +165,25 @@ with tab1:
                     quitar_rep = st.checkbox("🔍 Combinar repetidas (Ver solo 1 renglón por caso)", value=True, key=f"rep_{arch}")
                     
                     if quitar_rep:
-                        df_vista = errores_filas.drop_duplicates(subset=["Subj", "Crse", "Materia Excel", "Materia Catálogo", "Comentario"])
+                        df_vista = errores_filas.drop_duplicates(subset=["Materia Excel", "Materia Catálogo", "Subj Original", "Crse Original", "Comentario"])
                     else:
                         df_vista = errores_filas
                         
-                    columnas_vista = ["Luz Verde", "Subj", "Crse", "Materia Excel", "Materia Catálogo", "Comentario"]
+                    columnas_vista = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
                     
                     df_editado_archivo = st.data_editor(
                         df_vista[columnas_vista],
                         hide_index=True,
-                        disabled=["Subj", "Crse", "Materia Excel", "Materia Catálogo", "Comentario"],
+                        disabled=["Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"],
                         column_config={
-                            "Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?", help="Marca para autorizar mantener los datos del catálogo"),
-                            "Subj": st.column_config.TextColumn("Subj (Excel)", width="small"),
-                            "Crse": st.column_config.TextColumn("Crse (Excel)", width="small"),
-                            "Materia Excel": st.column_config.TextColumn("Materia (Excel)", width="large"),
-                            "Materia Catálogo": st.column_config.TextColumn("Materia (Catálogo Oficial)", width="large"),
+                            "Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?", help="Marca para autorizar este cambio"),
+                            "Materia Excel": st.column_config.TextColumn("Materia (Excel)", width="medium"),
+                            "Materia Catálogo": st.column_config.TextColumn("Materia (Catálogo)", width="medium"),
                             "Comentario": st.column_config.TextColumn("Diagnóstico", width="medium"),
+                            "Subj Original": st.column_config.TextColumn("Subj (Excel)", width="small"),
+                            "Crse Original": st.column_config.TextColumn("Crse (Excel)", width="small"),
+                            "Subj Sugerido": st.column_config.TextColumn("Subj Sugerido", width="small"),
+                            "Crse Sugerido": st.column_config.TextColumn("Crse Sugerido", width="small"),
                         },
                         key=f"editor_{arch}",
                         use_container_width=True
@@ -162,10 +191,10 @@ with tab1:
                     
                     for _, row in df_editado_archivo.iterrows():
                         mascara = (st.session_state.res_auditoria["Archivo"] == arch) & \
-                                  (st.session_state.res_auditoria["Subj"] == row["Subj"]) & \
-                                  (st.session_state.res_auditoria["Crse"] == row["Crse"]) & \
                                   (st.session_state.res_auditoria["Materia Excel"] == row["Materia Excel"]) & \
-                                  (st.session_state.res_auditoria["Materia Catálogo"] == row["Materia Catálogo"])
+                                  (st.session_state.res_auditoria["Materia Catálogo"] == row["Materia Catálogo"]) & \
+                                  (st.session_state.res_auditoria["Subj Original"] == row["Subj Original"]) & \
+                                  (st.session_state.res_auditoria["Crse Original"] == row["Crse Original"])
                         
                         st.session_state.res_auditoria.loc[mascara, "Luz Verde"] = row["Luz Verde"]
         
@@ -173,8 +202,11 @@ with tab1:
         if st.button("💾 Aplicar Cambios Autorizados y Procesar Todo", type="primary"):
             corregido = st.session_state.raw_altas.copy()
             
-            # Nota: Al procesar, si Iris da Luz Verde, se asume que se valida la fila.
-            # En este enfoque invertido, las claves ya están en el excel, por lo que el archivo base mantiene su Subj y Crse.
+            for _, row in st.session_state.res_auditoria.iterrows():
+                if row["Luz Verde"] and pd.notna(row["Subj Sugerido"]):
+                    corregido.loc[row["idx"], "Subject"] = row["Subj Sugerido"]
+                    corregido.loc[row["idx"], "Course"] = row["Crse Sugerido"]
+            
             st.session_state.df_corregido = corregido
             
             # Generar Archivo de Resumen para persistencia futura
@@ -192,170 +224,4 @@ with tab1:
                     resultado_df["SUBJ"] = sub["Subject"]
                     resultado_df["COURSE"] = sub["Course"]
                     resultado_df["PARTEPERIODO"] = sub["Parte de Periodo"]
-                    resultado_df["STATUS"] = sub["Estatus"]
-                    resultado_df["CAPACIDAD"] = sub["Capacidad"]
-                    resultado_df["GRUPOS"] = 1
-                    resultado_df["SECCION"] = pd.to_numeric(sub["Sección"], errors="coerce").fillna(0).astype(int)
-                    resultado_df["TIPODEHORARIO"] = sub["Tipo de Horario"]
-                    resultado_df["METODO_EDUCATIVO"] = sub["Método Educativo"]
-                    resultado_df["SOCIODEINTEGRACION"] = "D2L"
-                    resultado_df["MODODECALIFICAR"] = sub["Modo de Calificar"]
-                    resultado_df["SESION"] = sub["Sesion"]
-                    
-                    columnas_ordenadas = ["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS",
-                                          "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO",
-                                          "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION"]
-                    resultado_df = resultado_df[columnas_ordenadas]
-                    
-                    nombre_base = name.rsplit('.', 1)[0] if '.' in name else name
-                    csv_filename = f"{nombre_base}.csv"
-                    
-                    csv_string = resultado_df.to_csv(index=False, encoding="utf-8-sig")
-                    zip_file.writestr(csv_filename, csv_string)
-                    st.session_state.csv_files_to_download[csv_filename] = csv_string.encode("utf-8-sig")
-            
-            st.session_state.zip_file_bytes = zip_buffer.getvalue()
-            st.session_state.ready_for_download = True
-            st.rerun()
-
-        if st.session_state.ready_for_download:
-            st.markdown("### 📥 Panel de Descarga de Resultados")
-            
-            st.download_button(
-                label="📝 📥 DESCARGAR ARCHIVO DE RESUMEN PARA PESTAÑA 2 (.CSV)",
-                data=st.session_state.summary_csv_bytes,
-                file_name="resumen_proceso_1.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-            
-            st.download_button(
-                label="💥 📥 DESCARGAR TODOS LOS CSVs JUNTOS (.ZIP)",
-                data=st.session_state.zip_file_bytes,
-                file_name="todos_los_csvs_estructurados.zip",
-                mime="application/zip",
-                use_container_width=True,
-                type="primary"
-            )
-            
-            st.markdown("---")
-            st.markdown("📄 **Descargar CSVs individuales (uno por uno):**")
-            for csv_filename, csv_bytes in st.session_state.csv_files_to_download.items():
-                st.download_button(
-                    label=f"📥 Descargar {csv_filename}",
-                    data=csv_bytes,
-                    file_name=csv_filename,
-                    mime="text/csv",
-                    key=f"p1_dl_{csv_filename}"
-                )
-
-# ============================================================
-# PESTAÑA 2: INYECTAR EN REPORTE ARGOS (CONSTRUIR HOJA "CRNs")
-# ============================================================
-with tab2:
-    st.header("Inyección de NRCs desde Reporte de ARGOS")
-    
-    mismo_momento = st.session_state.df_corregido is not None
-    procesar_cruce = False
-    df_base_cruce = None
-    dict_bytes_altas = {}
-    file_argos = None
-    
-    if mismo_momento:
-        st.success("🧠 **Modo Instantáneo:** La app recuerda tus correcciones actuales de la Pestaña 1. Solo necesitas subir el reporte de ARGOS.")
-        file_argos = st.file_uploader("📊 Cargar Reporte de ARGOS (.csv)", type=["csv"], key="argos_directo")
-        
-        if file_argos:
-            procesar_cruce = st.button("🚀 Cruzar Datos y Modificar Excels", type="primary", key="btn_directo")
-            if procesar_cruce:
-                df_base_cruce = st.session_state.df_corregido.copy()
-                dict_bytes_altas = st.session_state.original_files_bytes
-    else:
-        st.info("🕒 **Modo Asincrónico (Trabajo de otro día):** Como la app se reinició, no tienes que repetir la Pestaña 1. Sube el resumen descargado junto con tus archivos de ALTAS normales.")
-        
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            file_argos = st.file_uploader("📊 1. Cargar Reporte de ARGOS (.csv)", type=["csv"], key="argos_asinc")
-        with col_b:
-            file_resumen = st.file_uploader("📝 2. Cargar Archivo de Resumen (.csv)", type=["csv"])
-        with col_c:
-            files_altas_p2 = st.file_uploader("📁 3. Archivos de ALTAS (.xlsx)", accept_multiple_files=True, type=["xlsx"])
-            
-        if file_argos and file_resumen and files_altas_p2:
-            procesar_cruce = st.button("🚀 Cruzar Datos Directo (Usando Archivo Resumen)", type="primary", key="btn_asinc")
-            if procesar_cruce:
-                try:
-                    df_base_cruce = pd.read_csv(file_resumen, encoding="utf-8")
-                except:
-                    df_base_cruce = pd.read_csv(file_resumen, encoding="latin-1")
-                
-                for f in files_altas_p2:
-                    dict_bytes_altas[f.name] = f.getvalue()
-
-    if procesar_cruce and df_base_cruce is not None:
-        try:
-            argos_df = pd.read_csv(file_argos, encoding="utf-8")
-        except:
-            argos_df = pd.read_csv(file_argos, encoding="latin-1")
-        
-        st.info("Estandarizando llaves y realizando left_join de R...")
-        solicitud_p2 = df_base_cruce.copy()
-        
-        solicitud_p2["_k_per"] = solicitud_p2["Periodo"].astype(str).str.strip()
-        solicitud_p2["_k_niv"] = solicitud_p2["Nivel"].apply(normalizar_para_cruce)
-        solicitud_p2["_k_sub"] = solicitud_p2["Subject"].apply(normalizar_para_cruce)
-        solicitud_p2["_k_crs"] = solicitud_p2["Course"].astype(str).str.strip()
-        
-        def pad_seccion(v):
-            try: return f"{int(float(str(v).strip())):02d}"
-            except: return str(v).strip()
-        solicitud_p2["_k_sec"] = solicitud_p2["Sección"].apply(pad_seccion)
-        
-        argos_df["_k_per"] = argos_df["Periodo"].astype(str).str.strip()
-        argos_df["_k_niv"] = argos_df["Nivel"].apply(normalizar_para_cruce)
-        argos_df["_k_sub"] = argos_df["Área"].apply(normalizar_para_cruce)
-        argos_df["_k_crs"] = argos_df["No..Curso"].astype(str).str.strip()
-        argos_df["_k_sec"] = argos_df["Grupo"].apply(pad_seccion)
-        
-        llaves_cruce = ["_k_per", "_k_niv", "_k_sub", "_k_crs", "_k_sec"]
-        
-        argos_subset = argos_df[llaves_cruce + ["NRC"]]
-        fusion = solicitud_p2.merge(argos_subset, on=llaves_cruce, how="left")
-        fusion.drop(columns=llaves_cruce, inplace=True)
-        
-        fusion = fusion.drop_duplicates(subset=["NRC"], keep="first")
-        columnas_finales = ["NRC"] + [c for c in fusion.columns if c != "NRC" and c != "ArchivoOrigen"]
-        
-        st.success("¡Cruce completado con éxito!")
-        st.markdown("#### 📥 Descarga tus Excels modificados con la pestaña 'CRNs':")
-        
-        for name, sub in fusion.groupby("ArchivoOrigen"):
-            if name in dict_bytes_altas:
-                df_escribir = sub[columnas_finales].copy()
-                original_bytes = dict_bytes_altas[name]
-                wb = openpyxl.load_workbook(io.BytesIO(original_bytes))
-                
-                if "CRNs" in wb.sheetnames:
-                    del wb["CRNs"]
-                
-                ws = wb.create_sheet(title="CRNs")
-                ws.append(list(df_escribir.columns))
-                for r in df_escribir.values:
-                    ws.append(list(r))
-                
-                excel_buffer = io.BytesIO()
-                wb.save(excel_buffer)
-                excel_buffer.seek(0)
-                
-                nombre_base_excel = name.rsplit('.', 1)[0] if '.' in name else name
-                excel_filename = f"{nombre_base_excel} con hoja CRNs.xlsx"
-                
-                st.download_button(
-                    label=f"⬇️ Descargar {excel_filename}",
-                    data=excel_buffer.getvalue(),
-                    file_name=excel_filename,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key=f"dl_{name}"
-                )
-            else:
-                st.warning(f"⚠️ El archivo '{name}' se detectó en el resumen, pero no se subió en el bloque de ALTAS de esta pestaña.")
+                    resultado_df["STATUS"]
