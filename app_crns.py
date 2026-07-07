@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 
 # ================= 1. CONFIGURACIÓN Y FUNCIONES ESTRUCTURALES =================
 HOJA_ALTAS = "ALTAS"
-UMBRAL_FUZZY = 0.82  # Subido a 0.82 para máxima precisión factible
+UMBRAL_FUZZY = 0.82  # Máxima precisión factible configurada
 
 def quitar_acentos(t):
     if pd.isna(t) or t is None: return ""
@@ -143,15 +143,13 @@ with tab1:
             else:
                 st.error(f"❌ Ninguno de los archivos subidos tiene la pestaña '{HOJA_ALTAS}'")
 
-    # MESA DE CONTROL REDISEÑADA: AGRUPADA FÁCIL POR EXCEL
+    # MESA DE CONTROL REDISEÑADA: AGRUPADA POR EXCEL, SIN DUPLICADOS NI CORRECTAS
     if st.session_state.res_auditoria is not None:
         st.markdown("### ⚖️ Mesa de Control Interactiva por Excel")
-        st.markdown("*Haz clic en cada archivo para revisar y autorizar sus cambios sugeridos:*")
         
         df_aud = st.session_state.res_auditoria
         archivos_subidos = df_aud["Archivo"].unique()
         
-        # Iterar y crear un bloque limpio por cada archivo de Excel subido
         for arch in archivos_subidos:
             df_file = df_aud[df_aud["Archivo"] == arch]
             errores_filas = df_file[df_file["Comentario"] != "Todo correcto"]
@@ -160,30 +158,38 @@ with tab1:
             if total_detalles == 0:
                 st.success(f"✅ **{arch}** — ¡Todo perfecto, sin errores estructurales!")
             else:
-                with st.expander(f"⚠️ **{arch}** — ({total_detalles} materias con observaciones/sugerencias)", expanded=True):
-                    # Columnas simplificadas y enfocadas en la Materia
-                    columnas_vista = ["Luz Verde", "Materia", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido", "idx"]
+                with st.expander(f"⚠️ **{arch}** — Observaciones pendientes encontradas", expanded=True):
+                    quitar_rep = st.checkbox("🔍 Combinar repetidas (Ver solo 1 renglón por caso)", value=True, key=f"rep_{arch}")
+                    
+                    if quitar_rep:
+                        df_vista = errores_filas.drop_duplicates(subset=["Materia", "Subj Original", "Crse Original", "Comentario"])
+                    else:
+                        df_vista = errores_filas
+                        
+                    columnas_vista = ["Luz Verde", "Materia", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
                     
                     df_editado_archivo = st.data_editor(
-                        df_file[columnas_vista],
+                        df_vista[columnas_vista],
                         hide_index=True,
-                        disabled=["idx", "Materia", "Comentario", "Subj Original", "Crse Original"],
+                        disabled=["Materia", "Comentario", "Subj Original", "Crse Original"],
                         column_config={
                             "Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?", help="Marca para autorizar este cambio"),
                             "Materia": st.column_config.TextColumn("Nombre de la Materia", width="large"),
                             "Comentario": st.column_config.TextColumn("Diagnóstico", width="medium"),
-                            "idx": None # Oculta la columna del ID técnico
                         },
                         key=f"editor_{arch}",
                         use_container_width=True
                     )
                     
-                    # Sincronizar de vuelta al DataFrame maestro
                     for _, row in df_editado_archivo.iterrows():
-                        idx_val = row["idx"]
-                        st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == idx_val, "Luz Verde"] = row["Luz Verde"]
-                        st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == idx_val, "Subj Sugerido"] = row["Subj Sugerido"]
-                        st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == idx_val, "Crse Sugerido"] = row["Crse Sugerido"]
+                        mascara = (st.session_state.res_auditoria["Archivo"] == arch) & \
+                                  (st.session_state.res_auditoria["Materia"] == row["Materia"]) & \
+                                  (st.session_state.res_auditoria["Subj Original"] == row["Subj Original"]) & \
+                                  (st.session_state.res_auditoria["Crse Original"] == row["Crse Original"])
+                        
+                        st.session_state.res_auditoria.loc[mascara, "Luz Verde"] = row["Luz Verde"]
+                        st.session_state.res_auditoria.loc[mascara, "Subj Sugerido"] = row["Subj Sugerido"]
+                        st.session_state.res_auditoria.loc[mascara, "Crse Sugerido"] = row["Crse Sugerido"]
         
         st.markdown("---")
         if st.button("💾 Aplicar Cambios Autorizados y Procesar Todo", type="primary"):
@@ -195,8 +201,6 @@ with tab1:
                     corregido.loc[row["idx"], "Course"] = row["Crse Sugerido"]
             
             st.session_state.df_corregido = corregido
-            
-            # --- NUEVA LÓGICA DE COMPRESIÓN ZIP MASIVA ---
             st.session_state.csv_files_to_download = {}
             zip_buffer = io.BytesIO()
             
@@ -234,11 +238,8 @@ with tab1:
             st.session_state.ready_for_download = True
             st.rerun()
 
-        # ZONA DE DESCARGA FINAL INTERACTIVA
         if st.session_state.ready_for_download:
             st.markdown("### 📥 Panel de Descarga de Resultados")
-            
-            # EL BOTÓN REQUERIDO: UN SOLO CLIC DESCARGA TODO
             st.download_button(
                 label="💥 📥 DESCARGAR TODOS LOS CSVs JUNTOS (.ZIP)",
                 data=st.session_state.zip_file_bytes,
@@ -247,7 +248,6 @@ with tab1:
                 use_container_width=True,
                 type="primary"
             )
-            
             with st.expander("Descargar archivos individuales separados"):
                 for filename, data_bytes in st.session_state.csv_files_to_download.items():
                     st.download_button(
@@ -290,7 +290,7 @@ with tab2:
                 
                 argos_df["_k_per"] = argos_df["Periodo"].astype(str).str.strip()
                 argos_df["_k_niv"] = argos_df["Nivel"].apply(normalizar_para_cruce)
-                argos_df["_k_sub"] = argos_df["Área"].apply(normalizer_para_cruce)
+                argos_df["_k_sub"] = argos_df["Área"].apply(normalizar_para_cruce)
                 argos_df["_k_crs"] = argos_df["No..Curso"].astype(str).str.strip()
                 argos_df["_k_sec"] = argos_df["Grupo"].apply(pad_seccion)
                 
