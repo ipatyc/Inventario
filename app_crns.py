@@ -246,7 +246,7 @@ with tab1:
         if st.session_state.ready_for_download:
             st.markdown("### 📥 Panel de Descarga de Resultados")
             
-            # EL NUEVO ARCHIVO SALVAVIDAS SOLICITADO POR IRIS
+            # 1. El archivo resumen salvavidas solicitado por Iris
             st.download_button(
                 label="📝 📥 DESCARGAR ARCHIVO DE RESUMEN PARA PESTAÑA 2 (.CSV)",
                 data=st.session_state.summary_csv_bytes,
@@ -255,6 +255,7 @@ with tab1:
                 use_container_width=True,
             )
             
+            # 2. El archivo ZIP masivo
             st.download_button(
                 label="💥 📥 DESCARGAR TODOS LOS CSVs JUNTOS (.ZIP)",
                 data=st.session_state.zip_file_bytes,
@@ -263,6 +264,18 @@ with tab1:
                 use_container_width=True,
                 type="primary"
             )
+            
+            # 3. LO QUE HABÍA QUITADO: BOTONES UNO POR UNO DEVUELTOS A LA VIDA
+            st.markdown("---")
+            st.markdown("📄 **Descargar CSVs individuales (uno por uno):**")
+            for csv_filename, csv_bytes in st.session_state.csv_files_to_download.items():
+                st.download_button(
+                    label=f"📥 Descargar {csv_filename}",
+                    data=csv_bytes,
+                    file_name=csv_filename,
+                    mime="text/csv",
+                    key=f"p1_dl_{csv_filename}"
+                )
 
 # ============================================================
 # PESTAÑA 2: INYECTAR EN REPORTE ARGOS (CONSTRUIR HOJA "CRNs")
