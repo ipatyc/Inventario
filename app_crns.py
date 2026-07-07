@@ -6,7 +6,7 @@ import unicodedata
 import openpyxl
 from difflib import SequenceMatcher
 
-# ================= 1. CONFIGURACIÓN Y FUNCIONES (DEBEN IR AQUÍ ARRIBA) =================
+# ================= 1. CONFIGURACIÓN Y FUNCIONES (ARRIBA DE TODO) =================
 HOJA_ALTAS = "ALTAS"
 UMBRAL_FUZZY = 0.72
 
@@ -51,6 +51,8 @@ with tab1:
             
             st.toast("Cargando Catálogo de Materias...", icon="📑")
             xls_cat = pd.ExcelFile(file_cat)
+            
+            # El índice ahora guardará LISTAS de materias para soportar nombres duplicados con distintos Subj/Crse
             indice_cat = {}
             for hoja in xls_cat.sheet_names:
                 df_c = xls_cat.parse(hoja)
@@ -59,8 +61,8 @@ with tab1:
                         niv = normalizar_para_cruce(f.get("Nivel"))
                         indice_cat.setdefault(niv, []).append({
                             "mat_norm": normalizar_para_cruce(f.get("Materia")), 
-                            "subj": f.get("Subj"), 
-                            "crse": f.get("Crse")
+                            "subj": str(f.get("Subj")).strip(), 
+                            "crse": str(f.get("Crse")).strip()
                         })
             
             # Procesando cada archivo de Altas
@@ -87,47 +89,66 @@ with tab1:
                 for idx, fila in df_total.iterrows():
                     niv_n = normalizar_para_cruce(fila.get("Nivel"))
                     mat_n = normalizar_para_cruce(fila.get("Nombre de la Materia"))
+                    subj_orig = str(fila.get("Subject")).strip()
+                    crse_orig = str(fila.get("Course")).strip()
+                    
                     candidatos = indice_cat.get(niv_n, [])
                     
-                    match = next((c for c in candidatos if c["mat_norm"] == mat_n), None)
-                    tipo = "exacto"
+                    # 1. Buscar TODOS los matches que tengan exactamente ese nombre de materia
+                    matches_exactos = [c for c in candidatos if c["mat_norm"] == mat_n]
                     
-                    if not match:
+                    match_elegido = None
+                    tipo = "no_encontrado"
+                    
+                    if matches_exactos:
+                        tipo = "exacto"
+                        # NUEVO: Verificamos si lo que escribió Iris ya coincide con AL MENOS UNO de los válidos en catálogo
+                        coincidencia_perfecta = next((m for m in matches_exactos if m["subj"] == subj_orig and m["crse"] == crse_orig), None)
+                        
+                        if coincidencia_perfecta:
+                            match_elegido = coincidencia_perfecta
+                        else:
+                            # Si no coincide con ninguno, tomamos el primero como la sugerencia por defecto
+                            match_elegido = matches_exactos[0]
+                    else:
+                        # Si no hay match exacto por nombre, buscamos por Fuzzy Match (Similitud)
                         mejor, mejor_s = None, -1.0
                         for c in candidatos:
                             s = similitud(mat_n, c["mat_norm"])
                             if s > mejor_s: mejor_s, mejor = s, c
                         if mejor and mejor_s >= UMBRAL_FUZZY:
-                            match, tipo = mejor, "fuzzy"
-                        else:
-                            tipo = "no_encontrado"
+                            # Encontró un grupo por aproximación, buscamos si hay más con ese mismo nombre aproximado
+                            matches_fuzzy = [c for c in candidatos if c["mat_norm"] == mejor["mat_norm"]]
+                            coincidencia_perf_f = next((m for m in matches_fuzzy if m["subj"] == subj_orig and m["crse"] == crse_orig), None)
+                            
+                            tipo = "fuzzy"
+                            match_elegido = coincidencia_perf_f if coincidencia_perf_f else mejor
                     
-                    subj_orig = str(fila.get("Subject")).strip()
-                    crse_orig = str(fila.get("Course")).strip()
-                    subj_sug = str(match["subj"]).strip() if match else None
-                    crse_sug = str(match["crse"]).strip() if match else None
+                    # Definición del Comentario Final
+                    subj_sug = match_elegido["subj"] if match_elegido else None
+                    crse_sug = match_elegido["crse"] if match_elegido else None
                     
                     if tipo == "no_encontrado":
                         comentario = "No se encontro la materia en el catalogo"
+                    elif subj_orig == subj_sug and crse_orig == crse_sug:
+                        comentario = "Todo correcto"
                     elif subj_orig != subj_sug and crse_orig != crse_sug:
                         comentario = "Subject y Course incorrectos"
                     elif subj_orig != subj_sug:
                         comentario = "Subject incorrecto"
-                    elif crse_orig != crse_sug:
-                        comentario = "Course incorrecto"
                     else:
-                        comentario = "Todo correcto"
+                        comentario = "Course incorrecto"
                     
                     resultados.append({
-                        "Luz Verde": True if tipo == "fuzzy" else False,
+                        "Luz Verde": True if tipo == "fuzzy" and comentario != "Todo correcto" else False,
                         "idx": idx, 
                         "Archivo": fila.get("ArchivoOrigen"), 
                         "Materia": fila.get("Nombre de la Materia"), 
                         "Comentario": comentario,
                         "Subj Original": fila.get("Subject"), 
                         "Crse Original": fila.get("Course"),
-                        "Subj Sugerido": match["subj"] if match else None, 
-                        "Crse Sugerido": match["crse"] if match else None
+                        "Subj Sugerido": subj_sug, 
+                        "Crse Sugerido": crse_sug
                     })
                 
                 st.session_state.res_auditoria = pd.DataFrame(resultados)
@@ -229,7 +250,7 @@ with tab2:
                 solicitud_p2 = st.session_state.df_corregido.copy()
                 
                 solicitud_p2["_k_per"] = solicitud_p2["Periodo"].astype(str).str.strip()
-                solicitud_p2["_k_niv"] = solicitud_p2["Nivel"].apply(normalizer_para_cruce)
+                solicitud_p2["_k_niv"] = solicitud_p2["Nivel"].apply(normalizar_para_cruce)
                 solicitud_p2["_k_sub"] = solicitud_p2["Subject"].apply(normalizer_para_cruce)
                 solicitud_p2["_k_crs"] = solicitud_p2["Course"].astype(str).str.strip()
                 
@@ -239,7 +260,7 @@ with tab2:
                 solicitud_p2["_k_sec"] = solicitud_p2["Sección"].apply(pad_seccion)
                 
                 argos_df["_k_per"] = argos_df["Periodo"].astype(str).str.strip()
-                argos_df["_k_niv"] = argos_df["Nivel"].apply(normalizer_para_cruce)
+                argos_df["_k_niv"] = argos_df["Nivel"].apply(normalizar_para_cruce)
                 argos_df["_k_sub"] = argos_df["Área"].apply(normalizer_para_cruce)
                 argos_df["_k_crs"] = argos_df["No..Curso"].astype(str).str.strip()
                 argos_df["_k_sec"] = argos_df["Grupo"].apply(pad_seccion)
