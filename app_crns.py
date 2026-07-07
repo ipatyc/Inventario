@@ -1,266 +1,291 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import io
-import re
 import unicodedata
+import openpyxl
 from difflib import SequenceMatcher
 
-# ================= CONFIGURACIÓN Y FUNCIONES (¡ESTO DEBE IR ARRIBA!) =================
-HOJA_ALTAS = "ALTAS"
-UMBRAL_FUZZY = 0.72
-
-def normalizer(t):
-    if pd.isna(t) or t is None: return ""
-    return "".join(c for c in unicodedata.normalize("NFD", str(t).upper().strip()) if unicodedata.category(c) != "Mn")
-
-def similitud(a, b): 
-    return SequenceMatcher(None, a, b).ratio()
-
-def _sec_pad(v):
-    s = str(v).strip()
-    if s == "" or str(s).lower() == "nan": return ""
-    try: return str(int(float(s))).zfill(2)
-    except: return s
-# ===================================================================================
-
-# Después de este bloque ya puede seguir el resto de tu código (st.set_page_config, st.title, etc.)
-# Configuración de la página de Streamlit
+# Configuración de la página
 st.set_page_config(page_title="Consola Iris Cavazos", page_icon="🎛️", layout="wide")
 
 st.title("🎛️ Consola de Control de Materias e Inyección de NRCs")
 st.markdown("---")
 
-# ================= CONFIGURACIÓN Y FUNCIONES =================
-HOJA_ALTAS = "ALTAS"  # Pestaña configurada en plural
+# ================= LÓGICA DE TU SCRIPT DE R =================
+HOJA_ALTAS = "ALTAS"
 UMBRAL_FUZZY = 0.72
 
-def normalizar(t):
+def quitar_acentos(t):
     if pd.isna(t) or t is None: return ""
-    return "".join(c for c in unicodedata.normalize("NFD", str(t).upper().strip()) if unicodedata.category(c) != "Mn")
+    return "".join(c for c in unicodedata.normalize("NFD", str(t)) if unicodedata.category(c) != "Mn")
+
+def normalizar_para_cruce(t):
+    return quitar_acentos(str(t).upper().strip())
 
 def similitud(a, b): 
     return SequenceMatcher(None, a, b).ratio()
 
-# Pad para las secciones (ej. 1 -> '01')
-def _sec_pad(v):
-    s = str(v).strip()
-    if s == "" or str(s).lower() == "nan": return ""
-    try: return str(int(float(s))).zfill(2)
-    except: return s
-
-# ================= ESTADOS EN MEMORIA (SESSION STATE) =================
+# Guardar archivos originales en memoria para el Proceso 2
+if "original_files_bytes" not in st.session_state: st.session_state.original_files_bytes = {}
 if "df_corregido" not in st.session_state: st.session_state.df_corregido = None
 if "raw_altas" not in st.session_state: st.session_state.raw_altas = None
 if "res_auditoria" not in st.session_state: st.session_state.res_auditoria = None
 
-# Crear pestañas para separar los dos procesos
-tab1, tab2 = st.tabs(["1️⃣ Proceso: Validación e Interactividad", "2️⃣ Proceso: Inyección de NRCs (ARGOS)"])
+# Pestañas de Navegación
+tab1, tab2 = st.tabs(["1️⃣ Proceso: Validación y Generar CSV", "2️⃣ Proceso: Inyección de NRCs (ARGOS)"])
 
 # ============================================================
-# PESTAÑA 1: VALIDACIÓN E INTERACTIVIDAD
+# PESTAÑA 1: VALIDACIÓN Y GENERACIÓN DE CSV
 # ============================================================
 with tab1:
-    st.header("Validación de Claves de Materias")
+    st.header("Validación de Claves y Generación de CSV")
     
-    # Subida de archivos
-    col_up1, col_up2 = st.columns(2)
-    with col_up1:
-        file_cat = st.file_uploader("📑 Inventario de Materias (Catálogo - Excel)", type=["xlsx"])
-    with col_up2:
-        files_altas = st.file_uploader("📁 Archivos Excel de ALTAS (Puedes subir varios juntos)", accept_multiple_files=True, type=["xlsx"])
+    col1, col2 = st.columns(2)
+    with col1:
+        file_cat = st.file_uploader("📑 Catálogo de Materias Estatales (Excel)", type=["xlsx"])
+    with col2:
+        files_altas = st.file_uploader("📁 Archivos de ALTAS (Puedes subir varios)", accept_multiple_files=True, type=["xlsx"])
     
     if files_altas and file_cat:
         if st.button("⚡ Ejecutar Validación Inteligente", type="primary"):
-            with st.spinner("Procesando catálogos y analizando archivos de Altas..."):
-                # 1. Leer e indexar Catálogo
-                xls_cat = pd.ExcelFile(file_cat)
-                indice_cat = {}
-                for hoja in xls_cat.sheet_names:
-                    df_c = xls_cat.parse(hoja)
-                    if "Nivel" in df_c.columns and "Materia" in df_c.columns:
-                        for _, f in df_c.iterrows():
-                            niv = normalizer(f.get("Nivel"))
-                            indice_cat.setdefault(niv, []).append({
-                                "mat_norm": normalizer(f.get("Materia")), "mat_orig": f.get("Materia"),
-                                "subj": f.get("Subj"), "crse": f.get("Crse")
-                            })
-                
-                # 2. Leer archivos de Altas buscando la pestaña "ALTAS"
-                piezas = []
-                for f in files_altas:
-                    xls_a = pd.ExcelFile(f)
-                    hojas_reales = [h for h in xls_a.sheet_names if h.strip().upper() == HOJA_ALTAS.upper()]
-                    if hojas_reales:
-                        df_a = xls_a.parse(hojas_reales[0])
-                        df_a["ArchivoOrigen"] = f.name
-                        piezas.append(df_a)
-                
-                if piezas:
-                    df_total = pd.concat(piezas, ignore_index=True)
-                    st.session_state.raw_altas = df_total.copy()
-                    
-                    # 3. Evaluar Fila por Fila (Auditoría)
-                    resultados = []
-                    for idx, fila in df_total.iterrows():
-                        niv_n = normalizer(fila.get("Nivel"))
-                        mat_n = normalizer(fila.get("Nombre de la Materia"))
-                        candidatos = indice_cat.get(niv_n, [])
-                        
-                        match = next((c for c in candidatos if c["mat_norm"] == mat_n), None)
-                        tipo, score = "exacto", 1.0
-                        
-                        if not match:
-                            mejor, mejor_s = None, -1.0
-                            for c in candidatos:
-                                s = similitud(mat_n, c["mat_norm"])
-                                if s > mejor_s: mejor_s, mejor = s, c
-                            if mejor and mejor_s >= UMBRAL_FUZZY:
-                                match, tipo, score = mejor, "fuzzy", mejor_s
-                            else:
-                                tipo, score = "no_encontrado", max(mejor_s, 0.0)
-                        
-                        resultados.append({
-                            "Luz Verde": True if tipo == "fuzzy" else False, # Auto-marcar sugerencias fuzzy
-                            "idx": idx, 
-                            "Archivo Origen": fila.get("ArchivoOrigen"), 
-                            "Nivel": fila.get("Nivel"),
-                            "Materia Original": fila.get("Nombre de la Materia"), 
-                            "Dictamen": "Todo correcto" if tipo == "exacto" else "Revisar/Fuzzy Match" if tipo == "fuzzy" else "No encontrado",
-                            "Subj Original": fila.get("Subject"), 
-                            "Crse Original": fila.get("Course"),
-                            "Subj Sugerido": match["subj"] if match else None, 
-                            "Crse Sugerido": match["crse"] if match else None
+            
+            st.toast("Cargando Catálogo de Materias...", icon="📑")
+            xls_cat = pd.ExcelFile(file_cat)
+            indice_cat = {}
+            for hoja in xls_cat.sheet_names:
+                df_c = xls_cat.parse(hoja)
+                if "Nivel" in df_c.columns and "Materia" in df_c.columns:
+                    for _, f in df_c.iterrows():
+                        niv = normalizer_para_cruce(f.get("Nivel"))
+                        indice_cat.setdefault(niv, []).append({
+                            "mat_norm": normalizer_para_cruce(f.get("Materia")), 
+                            "subj": f.get("Subj"), 
+                            "crse": f.get("Crse")
                         })
+            
+            # Procesando cada archivo de Altas
+            piezas = []
+            for f in files_altas:
+                # REGLA 1: Extrae solo la primera palabra para el aviso en pantalla
+                primera_palabra = f.name.split()[0]
+                st.info(f"🔍 Checking / Revisando archivo: **{primera_palabra}**")
+                
+                # Guardar los bytes usando el nombre completo original
+                st.session_state.original_files_bytes[f.name] = f.getvalue()
+                
+                xls_a = pd.ExcelFile(f)
+                hojas_reales = [h for h in xls_a.sheet_names if h.strip().upper() == HOJA_ALTAS]
+                if hojas_reales:
+                    df_a = xls_a.parse(hojas_reales[0])
+                    df_a["ArchivoOrigen"] = f.name
+                    piezas.append(df_a)
+            
+            if piezas:
+                df_total = pd.concat(piezas, ignore_index=True)
+                st.session_state.raw_altas = df_total.copy()
+                
+                # Auditoría fila por fila
+                resultados = []
+                for idx, fila in df_total.iterrows():
+                    niv_n = normalizer_para_cruce(fila.get("Nivel"))
+                    mat_n = normalizer_para_cruce(fila.get("Nombre de la Materia"))
+                    candidatos = indice_cat.get(niv_n, [])
                     
-                    st.session_state.res_auditoria = pd.DataFrame(resultados)
-                    st.success("¡Análisis completado con éxito!")
-                else:
-                    st.error(f"❌ Ninguno de los archivos subidos contiene la pestaña '{HOJA_ALTAS}'.")
+                    match = next((c for c in candidatos if c["mat_norm"] == mat_n), None)
+                    tipo = "exacto"
+                    
+                    if not match:
+                        mejor, mejor_s = None, -1.0
+                        for c in candidatos:
+                            s = similitud(mat_n, c["mat_norm"])
+                            if s > mejor_s: mejor_s, mejor = s, c
+                        if mejor and mejor_s >= UMBRAL_FUZZY:
+                            match, tipo = mejor, "fuzzy"
+                        else:
+                            tipo = "no_encontrado"
+                    
+                    subj_orig = str(fila.get("Subject")).strip()
+                    crse_orig = str(fila.get("Course")).strip()
+                    subj_sug = str(match["subj"]).strip() if match else None
+                    crse_sug = str(match["crse"]).strip() if match else None
+                    
+                    if tipo == "no_encontrado":
+                        comentario = "No se encontro la materia en el catalogo"
+                    elif subj_orig != subj_sug and crse_orig != crse_sug:
+                        comentario = "Subject y Course incorrectos"
+                    elif subj_orig != subj_sug:
+                        comentario = "Subject incorrecto"
+                    elif crse_orig != crse_sug:
+                        comentario = "Course incorrecto"
+                    else:
+                        comentario = "Todo correcto"
+                    
+                    resultados.append({
+                        "Luz Verde": True if tipo == "fuzzy" else False,
+                        "idx": idx, 
+                        "Archivo": fila.get("ArchivoOrigen"), 
+                        "Materia": fila.get("Nombre de la Materia"), 
+                        "Comentario": comentario,
+                        "Subj Original": fila.get("Subject"), 
+                        "Crse Original": fila.get("Course"),
+                        "Subj Sugerido": match["subj"] if match else None, 
+                        "Crse Sugerido": match["crse"] if match else None
+                    })
+                
+                st.session_state.res_auditoria = pd.DataFrame(resultados)
+                st.success("¡Revisión terminada con éxito!")
+            else:
+                st.error(f"❌ Ninguno de los archivos subidos tiene la pestaña '{HOJA_ALTAS}'")
 
-    # Mostrar Mesa de Control Interactiva si ya hay auditoría
+    # Mesa de control interactiva
     if st.session_state.res_auditoria is not None:
-        st.markdown("### ⚖️ Mesa de Control Interactiva")
-        st.info("A continuación se muestran las incidencias. Las filas con 'Fuzzy Match' tienen la casilla 'Luz Verde' activa por defecto. Puedes desmarcar o modificar lo que consideres.")
-        
+        st.markdown("### ⚖️ Mesa de Control de Coincidencias")
         df_aud = st.session_state.res_auditoria
         
-        # Filtro rápido en pantalla
-        filtro = st.radio("Filtrar vista:", ["Solo Incidencias (Fuzzy / No Encontradas)", "Mostrar Todo (Incluyendo Perfectas)"], horizontal=True)
-        if filtro == "Solo Incidencias (Fuzzy / No Encontradas)":
-            df_visible = df_aud[df_aud["Dictamen"] != "Todo correcto"]
-        else:
-            df_visible = df_aud
-
-        # Tabla Interactiva Avanzada de Streamlit
+        filtro = st.radio("Filtro visual:", ["Solo Errores / Sugerencias", "Ver Todo"], horizontal=True)
+        df_vis = df_aud if filtro == "Ver Todo" else df_aud[df_aud["Comentario"] != "Todo correcto"]
+        
         df_editado = st.data_editor(
-            df_visible,
+            df_vis,
             hide_index=True,
-            disabled=["idx", "Archivo Origen", "Nivel", "Materia Original", "Dictamen", "Subj Original", "Crse Original"],
+            disabled=["idx", "Archivo", "Materia", "Comentario", "Subj Original", "Crse Original"],
             column_config={
-                "Luz Verde": st.column_config.CheckboxColumn("Luz Verde", help="Dale luz verde para aplicar el Subj/Crse sugerido"),
+                "Luz Verde": st.column_config.CheckboxColumn("Luz Verde", help="Aprobar corrección automática"),
                 "Subj Sugerido": st.column_config.TextColumn("Subj Sugerido"),
                 "Crse Sugerido": st.column_config.TextColumn("Crse Sugerido")
             },
             use_container_width=True
         )
         
-        # Sincronizar cambios del editor al estado global
         for _, row in df_editado.iterrows():
             st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == row["idx"], "Luz Verde"] = row["Luz Verde"]
             st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == row["idx"], "Subj Sugerido"] = row["Subj Sugerido"]
             st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == row["idx"], "Crse Sugerido"] = row["Crse Sugerido"]
-
-        if st.button("💾 Aplicar Luz Verde y Generar CSVs SQL", type="primary"):
-            corregido = st.session_state.raw_altas.copy()
-            df_final_aud = st.session_state.res_auditoria
             
-            # Aplicar correcciones aprobadas
-            for _, row in df_final_aud.iterrows():
+        if st.button("💾 Aplicar Luz Verde y Generar CSVs", type="primary"):
+            corregido = st.session_state.raw_altas.copy()
+            
+            for _, row in st.session_state.res_auditoria.iterrows():
                 if row["Luz Verde"] and pd.notna(row["Subj Sugerido"]):
                     corregido.loc[row["idx"], "Subject"] = row["Subj Sugerido"]
                     corregido.loc[row["idx"], "Course"] = row["Crse Sugerido"]
             
             st.session_state.df_corregido = corregido
-            st.success("¡Cambios consolidados en memoria! Ya puedes descargar los archivos individuales abajo:")
+            st.success("¡Cambios guardados! Descarga tus archivos .csv estructurados aquí abajo:")
             
-            # Generar botones de descarga por archivo original estructurando las columnas SQL
-            st.markdown("#### 📥 Archivos Listos para Descargar:")
+            # Generación del CSV mapeado idéntico a tu script de R
             for name, sub in corregido.groupby("ArchivoOrigen"):
-                columnas = ["Periodo","Campus","Parte de Periodo","Estatus","Capacidad",
-                            "Sección","Tipo de Horario","Método Educativo","Modo de Calificar","Sesion"]
-                df_csv = pd.DataFrame()
-                for c in columnas:
-                    df_csv[c] = sub[c] if c in sub.columns else ""
+                resultado_df = pd.DataFrame()
                 
-                df_csv.rename(columns={"Campus":"SEDE", "Parte de Periodo":"PARTEPERIODO", 
-                                       "Estatus":"STATUS", "Sección":"SECCION", 
-                                       "Tipo de Horario":"TIPODEHORARIO", "Método Educativo":"METODO_EDUCATIVO",
-                                       "Modo de Calificar":"MODODECALIFICAR", "Sesion":"SESION"}, inplace=True)
-                df_csv["PERIODO"] = df_csv["Periodo"]
-                df_csv.drop(columns=["Periodo"], inplace=True)
-                df_csv["SUBJ"] = sub["Subject"]
-                df_csv["COURSE"] = sub["Course"]
-                df_csv["GRUPOS"] = 1
-                df_csv["SOCIODEINTEGRACION"] = "D2L"
+                resultado_df["PERIODO"] = sub["Periodo"]
+                resultado_df["SEDE"] = sub["Campus"]
+                resultado_df["SUBJ"] = sub["Subject"]
+                resultado_df["COURSE"] = sub["Course"]
+                resultado_df["PARTEPERIODO"] = sub["Parte de Periodo"]
+                resultado_df["STATUS"] = sub["Estatus"]
+                resultado_df["CAPACIDAD"] = sub["Capacidad"]
+                resultado_df["GRUPOS"] = 1
+                resultado_df["SECCION"] = pd.to_numeric(sub["Sección"], errors="coerce").fillna(0).astype(int)
+                resultado_df["TIPODEHORARIO"] = sub["Tipo de Horario"]
+                resultado_df["METODO_EDUCATIVO"] = sub["Método Educativo"]
+                resultado_df["SOCIODEINTEGRACION"] = "D2L"
+                resultado_df["MODODECALIFICAR"] = sub["Modo de Calificar"]
+                resultado_df["SESION"] = sub["Sesion"]
+                
+                columnas_ordenadas = ["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS",
+                                      "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO",
+                                      "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION"]
+                resultado_df = resultado_df[columnas_ordenadas]
+                
+                # REGLA 2: Mantener el mismo nombre original pero cambiar la extensión a .csv
+                nombre_base = name.rsplit('.', 1)[0] if '.' in name else name
+                csv_filename = f"{nombre_base}.csv"
                 
                 csv_buffer = io.StringIO()
-                df_csv.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
+                resultado_df.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
                 
-                fname_out = f"{name.split('.')[0]}_PROCESADO_SQL.csv"
-                st.download_button(label=f"⬇️ Descargar {fname_out}", data=csv_buffer.getvalue(), file_name=fname_out, mime="text/csv")
+                st.download_button(
+                    label=f"📥 Descargar {csv_filename}", 
+                    data=csv_buffer.getvalue(), 
+                    file_name=csv_filename, 
+                    mime="text/csv"
+                )
 
 # ============================================================
-# PESTAÑA 2: INYECTAR ARGOS
+# PESTAÑA 2: INYECTAR EN REPORTE ARGOS (CONSTRUIR HOJA "CRNs")
 # ============================================================
 with tab2:
-    st.header("Inyección de NRCs con Reporte de ARGOS")
+    st.header("Inyección de NRCs desde Reporte de ARGOS")
     
     if st.session_state.df_corregido is None:
-        st.warning("⚠️ Primero debes completar el Proceso 1 (Ejecutar validación, dar Luz Verde y Procesar) antes de poder hacer el cruce con ARGOS aquí.")
+        st.warning("⚠️ Primero debes completar el Proceso 1 (Validar, dar Luz Verde y Procesar) para poder usar esta pestaña.")
     else:
         file_argos = st.file_uploader("📊 Cargar Reporte de ARGOS (.csv)", type=["csv"])
         
         if file_argos:
-            if st.button("🚀 Cruzar Información y Generar Excels Finales", type="primary"):
+            if st.button("🚀 Cruzar Datos y Modificar Excels", type="primary"):
                 try:
                     argos_df = pd.read_csv(file_argos, encoding="utf-8")
                 except:
                     argos_df = pd.read_csv(file_argos, encoding="latin-1")
                 
-                with st.spinner("Realizando cruce inteligente de llaves primarias..."):
-                    df_m = st.session_state.df_corregido.copy()
+                st.info("Estandarizando llaves y realizando left_join de R...")
+                solicitud_p2 = st.session_state.df_corregido.copy()
+                
+                solicitud_p2["_k_per"] = solicitud_p2["Periodo"].astype(str).str.strip()
+                solicitud_p2["_k_niv"] = solicitud_p2["Nivel"].apply(normalizer_para_cruce)
+                solicitud_p2["_k_sub"] = solicitud_p2["Subject"].apply(normalizer_para_cruce)
+                solicitud_p2["_k_crs"] = solicitud_p2["Course"].astype(str).str.strip()
+                
+                def pad_seccion(v):
+                    try: return f"{int(float(str(v).strip())):02d}"
+                    except: return str(v).strip()
+                solicitud_p2["_k_sec"] = solicitud_p2["Sección"].apply(pad_seccion)
+                
+                argos_df["_k_per"] = argos_df["Periodo"].astype(str).str.strip()
+                argos_df["_k_niv"] = argos_df["Nivel"].apply(normalizer_para_cruce)
+                argos_df["_k_sub"] = argos_df["Área"].apply(normalizer_para_cruce)
+                argos_df["_k_crs"] = argos_df["No..Curso"].astype(str).str.strip()
+                argos_df["_k_sec"] = argos_df["Grupo"].apply(pad_seccion)
+                
+                llaves_cruce = ["_k_per", "_k_niv", "_k_sub", "_k_crs", "_k_sec"]
+                
+                argos_subset = argos_df[llaves_cruce + ["NRC"]]
+                fusion = solicitud_p2.merge(argos_subset, on=llaves_cruce, how="left")
+                fusion.drop(columns=llaves_cruce, inplace=True)
+                
+                fusion = fusion.drop_duplicates(subset=["NRC"], keep="first")
+                columnas_finales = ["NRC"] + [c for c in fusion.columns if c != "NRC" and c != "ArchivoOrigen"]
+                
+                st.success("¡Cruce completado con éxito!")
+                st.markdown("#### 📥 Descarga tus Excels modificados con la pestaña 'CRNs':")
+                
+                for name, sub in fusion.groupby(st.session_state.df_corregido["ArchivoOrigen"]):
+                    df_escribir = sub[columnas_finales].copy()
                     
-                    # Crear llaves homologadas para el cruce
-                    df_m["_k_p"] = df_m["Periodo"].astype(str).str.strip()
-                    df_m["_k_n"] = df_m["Nivel"].apply(normalizer)
-                    df_m["_k_s"] = df_m["Subject"].apply(normalizer)
-                    df_m["_k_c"] = df_m["Course"].astype(str).str.strip()
-                    df_m["_k_sec"] = df_m["Sección"].apply(_sec_pad)
+                    original_bytes = st.session_state.original_files_bytes[name]
+                    wb = openpyxl.load_workbook(io.BytesIO(original_bytes))
                     
-                    argos_df["_k_p"] = argos_df["Periodo"].astype(str).str.strip()
-                    argos_df["_k_n"] = argos_df["Nivel"].apply(normalizer)
-                    argos_df["_k_s"] = argos_df["Área"].apply(normalizer)
-                    argos_df["_k_c"] = argos_df["No. Curso"].astype(str).str.strip()
-                    argos_df["_k_sec"] = argos_df["Grupo"].apply(_sec_pad)
+                    if "CRNs" in wb.sheetnames:
+                        del wb["CRNs"]
                     
-                    llaves = ["_k_p", "_k_n", "_k_s", "_k_c", "_k_sec"]
+                    ws = wb.create_sheet(title="CRNs")
+                    ws.append(list(df_escribir.columns))
+                    for r in df_escribir.values:
+                        ws.append(list(r))
                     
-                    # Fusión y limpieza
-                    fusion = df_m.merge(argos_df[llaves + ["NRC"]], on=llaves, how="left")
-                    fusion = fusion.drop_duplicates(subset=["NRC"], keep="first")
-                    fusion.drop(columns=llaves, inplace=True)
+                    excel_buffer = io.BytesIO()
+                    wb.save(excel_buffer)
+                    excel_buffer.seek(0)
                     
-                    st.success("¡Cruce completado exitosamente!")
-                    st.markdown("#### 📥 Descargar Excels con pestaña NRC:")
+                    # Conserva nombre original para el Excel con pestaña CRNs
+                    nombre_base_excel = name.rsplit('.', 1)[0] if '.' in name else name
+                    excel_filename = f"{nombre_base_excel} con hoja CRNs.xlsx"
                     
-                    for name, sub in fusion.groupby("ArchivoOrigen"):
-                        fname_out = f"{name.split('.')[0]}_CON_NRC.xlsx"
-                        
-                        out_excel = io.BytesIO()
-                        with pd.ExcelWriter(out_excel, engine='openpyxl') as writer:
-                            sub.drop(columns=["ArchivoOrigen"]).to_excel(writer, sheet_name="DATOS_SOLICITUD", index=False)
-                            if "NRC" in sub.columns:
-                                nrc_only = sub[["NRC", "Nivel", "Subject", "Course"]]
-                                nrc_only.to_excel(writer, sheet_name="NRC_ASIGNADOS", index=False)
-                        
-                        st.download_button(label=f"⬇️ Descargar {fname_out}", data=out_excel.getvalue(), file_name=fname_out, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button(
+                        label=f"⬇️ Descargar {excel_filename}",
+                        data=excel_buffer.getvalue(),
+                        file_name=excel_filename,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
