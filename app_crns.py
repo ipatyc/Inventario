@@ -57,7 +57,7 @@ with tab1:
             
             xls_cat = pd.ExcelFile(file_cat)
             indice_cat = {}
-            indice_cat_claves = {} # Índice secundario para búsqueda por Subj/Crse
+            indice_cat_claves = {} 
             
             for hoja in xls_cat.sheet_names:
                 df_c = xls_cat.parse(hoja)
@@ -123,7 +123,6 @@ with tab1:
                             coincidencia_perf_f = next((m for m in matches_fuzzy if m["subj"] == subj_orig and m["crse"] == crse_orig), None)
                             match_elegido = coincidencia_perf_f if coincidencia_perf_f else mejor
                     
-                    # ASIGNACIÓN DE LÓGICA CON REVISIÓN INVERSA DE IRIS
                     if match_elegido:
                         subj_sug = match_elegido["subj"]
                         crse_sug = match_elegido["crse"]
@@ -138,7 +137,6 @@ with tab1:
                         else:
                             comentario = "Course incorrecto"
                     else:
-                        # IRIS: Si no se halló por nombre, buscamos la materia por su Subj y Crse en el catálogo
                         s_excel_norm = normalizar_para_cruce(subj_orig)
                         c_excel_norm = crse_orig
                         
@@ -176,15 +174,29 @@ with tab1:
         df_aud = st.session_state.res_auditoria
         archivos_subidos = df_aud["Archivo"].unique()
         
+        # --- NUEVA SECCIÓN DE IRIS: CONTEO DE ERRORES POR ARCHIVO ---
+        st.markdown("#### 📊 Resumen Estadístico de Observaciones")
+        resumen_errores = []
+        for arch in archivos_subidos:
+            df_file = df_aud[df_aud["Archivo"] == arch]
+            total_err = len(df_file[df_file["Comentario"] != "Todo correcto"])
+            resumen_errores.append({
+                "Archivo Cargado": arch, 
+                "Errores / Observaciones Detectadas": total_err,
+                "Estado del Archivo": "⚠️ Requiere Revisión" if total_err > 0 else "✅ Todo Limpio"
+            })
+        st.dataframe(pd.DataFrame(resumen_errores), hide_index=True, use_container_width=True)
+        st.markdown("---")
+        
         for arch in archivos_subidos:
             df_file = df_aud[df_aud["Archivo"] == arch]
             errores_filas = df_file[df_file["Comentario"] != "Todo correcto"]
             total_detalles = len(errores_filas)
             
             if total_detalles == 0:
-                st.success(f"✅ **{arch}** — ¡Todo perfecto, sin errores estructurales!")
+                st.success(f"✅ **{arch}** — ¡Todo perfecto, sin observaciones!")
             else:
-                with st.expander(f"⚠️ **{arch}** — Observaciones pendientes encontradas", expanded=True):
+                with st.expander(f"⚠️ **{arch}** — ({total_detalles} renglones con observaciones encontradas)", expanded=True):
                     quitar_rep = st.checkbox("🔍 Combinar repetidas (Ver solo 1 renglón por caso)", value=True, key=f"rep_{arch}")
                     
                     if quitar_rep:
@@ -194,10 +206,11 @@ with tab1:
                         
                     columnas_vista = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
                     
+                    # IRIS: Se removieron 'Subj Sugerido' y 'Crse Sugerido' de la lista de disabled para que puedas editarlos a mano
                     df_editado_archivo = st.data_editor(
                         df_vista[columnas_vista],
                         hide_index=True,
-                        disabled=["Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"],
+                        disabled=["Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original"],
                         column_config={
                             "Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?", help="Marca para autorizar este cambio"),
                             "Materia Excel": st.column_config.TextColumn("Materia (Excel)", width="medium"),
@@ -205,13 +218,14 @@ with tab1:
                             "Comentario": st.column_config.TextColumn("Diagnóstico", width="medium"),
                             "Subj Original": st.column_config.TextColumn("Subj (Excel)", width="small"),
                             "Crse Original": st.column_config.TextColumn("Crse (Excel)", width="small"),
-                            "Subj Sugerido": st.column_config.TextColumn("Subj Sugerido", width="small"),
-                            "Crse Sugerido": st.column_config.TextColumn("Crse Sugerido", width="small"),
+                            "Subj Sugerido": st.column_config.TextColumn("Subj Sugerido ✍️", width="small", help="¡Haz doble clic para escribir a mano!"),
+                            "Crse Sugerido": st.column_config.TextColumn("Crse Sugerido ✍️", width="small", help="¡Haz doble clic para escribir a mano!"),
                         },
                         key=f"editor_{arch}",
                         use_container_width=True
                     )
                     
+                    # Guardar tanto la autorización como los textos manuales que escribas
                     for _, row in df_editado_archivo.iterrows():
                         mascara = (st.session_state.res_auditoria["Archivo"] == arch) & \
                                   (st.session_state.res_auditoria["Materia Excel"] == row["Materia Excel"]) & \
@@ -220,6 +234,8 @@ with tab1:
                                   (st.session_state.res_auditoria["Crse Original"] == row["Crse Original"])
                         
                         st.session_state.res_auditoria.loc[mascara, "Luz Verde"] = row["Luz Verde"]
+                        st.session_state.res_auditoria.loc[mascara, "Subj Sugerido"] = row["Subj Sugerido"]
+                        st.session_state.res_auditoria.loc[mascara, "Crse Sugerido"] = row["Crse Sugerido"]
         
         st.markdown("---")
         if st.button("💾 Aplicar Cambios Autorizados y Procesar Todo", type="primary"):
