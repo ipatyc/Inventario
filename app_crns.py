@@ -63,6 +63,7 @@ with tab1:
                     for _, f in df_c.iterrows():
                         niv = normalizar_para_cruce(f.get("Nivel"))
                         indice_cat.setdefault(niv, []).append({
+                            "mat_orig": str(f.get("Materia")).strip(),
                             "mat_norm": normalizar_para_cruce(f.get("Materia")), 
                             "subj": str(f.get("Subj")).strip(), 
                             "crse": str(f.get("Crse")).strip()
@@ -115,6 +116,7 @@ with tab1:
                     
                     subj_sug = match_elegido["subj"] if match_elegido else None
                     crse_sug = match_elegido["crse"] if match_elegido else None
+                    mat_cat_nombre = match_elegido["mat_orig"] if match_elegido else "❌ No encontrada en catálogo"
                     
                     if tipo == "no_encontrado":
                         comentario = "No se encontró en catálogo"
@@ -128,10 +130,11 @@ with tab1:
                         comentario = "Course incorrecto"
                     
                     resultados.append({
-                        "Luz Verde": True if tipo == "fuzzy" and comentario != "Todo correcto" else False,
+                        "Luz Verde": False,  # CAMBIO IRIS: Ninguna seleccionada por defecto
                         "idx": idx, 
                         "Archivo": fila.get("ArchivoOrigen"), 
-                        "Materia": fila.get("Nombre de la Materia"), 
+                        "Materia Excel": fila.get("Nombre de la Materia"), 
+                        "Materia Catálogo": mat_cat_nombre, # CAMBIO IRIS: Agregada columna catálogo
                         "Comentario": comentario,
                         "Subj Original": fila.get("Subject"), 
                         "Crse Original": fila.get("Course"),
@@ -162,19 +165,20 @@ with tab1:
                     quitar_rep = st.checkbox("🔍 Combinar repetidas (Ver solo 1 renglón por caso)", value=True, key=f"rep_{arch}")
                     
                     if quitar_rep:
-                        df_vista = errores_filas.drop_duplicates(subset=["Materia", "Subj Original", "Crse Original", "Comentario"])
+                        df_vista = errores_filas.drop_duplicates(subset=["Materia Excel", "Materia Catálogo", "Subj Original", "Crse Original", "Comentario"])
                     else:
                         df_vista = errores_filas
                         
-                    columnas_vista = ["Luz Verde", "Materia", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
+                    columnas_vista = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
                     
                     df_editado_archivo = st.data_editor(
                         df_vista[columnas_vista],
                         hide_index=True,
-                        disabled=["Materia", "Comentario", "Subj Original", "Crse Original"],
+                        disabled=["Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original"],
                         column_config={
                             "Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?", help="Marca para autorizar este cambio"),
-                            "Materia": st.column_config.TextColumn("Nombre de la Materia", width="large"),
+                            "Materia Excel": st.column_config.TextColumn("Materia (Excel)", width="large"),
+                            "Materia Catálogo": st.column_config.TextColumn("Materia (Catálogo)", width="large"),
                             "Comentario": st.column_config.TextColumn("Diagnóstico", width="medium"),
                         },
                         key=f"editor_{arch}",
@@ -183,7 +187,8 @@ with tab1:
                     
                     for _, row in df_editado_archivo.iterrows():
                         mascara = (st.session_state.res_auditoria["Archivo"] == arch) & \
-                                  (st.session_state.res_auditoria["Materia"] == row["Materia"]) & \
+                                  (st.session_state.res_auditoria["Materia Excel"] == row["Materia Excel"]) & \
+                                  (st.session_state.res_auditoria["Materia Catálogo"] == row["Materia Catálogo"]) & \
                                   (st.session_state.res_auditoria["Subj Original"] == row["Subj Original"]) & \
                                   (st.session_state.res_auditoria["Crse Original"] == row["Crse Original"])
                         
@@ -246,7 +251,6 @@ with tab1:
         if st.session_state.ready_for_download:
             st.markdown("### 📥 Panel de Descarga de Resultados")
             
-            # 1. El archivo resumen salvavidas solicitado por Iris
             st.download_button(
                 label="📝 📥 DESCARGAR ARCHIVO DE RESUMEN PARA PESTAÑA 2 (.CSV)",
                 data=st.session_state.summary_csv_bytes,
@@ -255,7 +259,6 @@ with tab1:
                 use_container_width=True,
             )
             
-            # 2. El archivo ZIP masivo
             st.download_button(
                 label="💥 📥 DESCARGAR TODOS LOS CSVs JUNTOS (.ZIP)",
                 data=st.session_state.zip_file_bytes,
@@ -265,7 +268,6 @@ with tab1:
                 type="primary"
             )
             
-            # 3. LO QUE HABÍA QUITADO: BOTONES UNO POR UNO DEVUELTOS A LA VIDA
             st.markdown("---")
             st.markdown("📄 **Descargar CSVs individuales (uno por uno):**")
             for csv_filename, csv_bytes in st.session_state.csv_files_to_download.items():
@@ -283,7 +285,6 @@ with tab1:
 with tab2:
     st.header("Inyección de NRCs desde Reporte de ARGOS")
     
-    # Evaluar si estamos en la misma sesión o en una sesión nueva (pasó mucho tiempo)
     mismo_momento = st.session_state.df_corregido is not None
     procesar_cruce = False
     df_base_cruce = None
@@ -321,7 +322,6 @@ with tab2:
                 for f in files_altas_p2:
                     dict_bytes_altas[f.name] = f.getvalue()
 
-    # LOGICA DE CRUCE UNIFICADA
     if procesar_cruce and df_base_cruce is not None:
         try:
             argos_df = pd.read_csv(file_argos, encoding="utf-8")
