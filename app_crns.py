@@ -58,7 +58,7 @@ with tab1:
                     for _, f in df_c.iterrows():
                         niv = normalizar_para_cruce(f.get("Nivel"))
                         indice_cat.setdefault(niv, []).append({
-                            "mat_norm": normalizer_para_cruce(f.get("Materia")), 
+                            "mat_norm": normalizar_para_cruce(f.get("Materia")), 
                             "subj": f.get("Subj"), 
                             "crse": f.get("Crse")
                         })
