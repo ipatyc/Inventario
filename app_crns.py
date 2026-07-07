@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import io
@@ -6,6 +5,25 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 
+# ================= CONFIGURACIÓN Y FUNCIONES (¡ESTO DEBE IR ARRIBA!) =================
+HOJA_ALTAS = "ALTAS"
+UMBRAL_FUZZY = 0.72
+
+def normalizer(t):
+    if pd.isna(t) or t is None: return ""
+    return "".join(c for c in unicodedata.normalize("NFD", str(t).upper().strip()) if unicodedata.category(c) != "Mn")
+
+def similitud(a, b): 
+    return SequenceMatcher(None, a, b).ratio()
+
+def _sec_pad(v):
+    s = str(v).strip()
+    if s == "" or str(s).lower() == "nan": return ""
+    try: return str(int(float(s))).zfill(2)
+    except: return s
+# ===================================================================================
+
+# Después de este bloque ya puede seguir el resto de tu código (st.set_page_config, st.title, etc.)
 # Configuración de la página de Streamlit
 st.set_page_config(page_title="Consola Iris Cavazos", page_icon="🎛️", layout="wide")
 
