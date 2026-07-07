@@ -60,9 +60,9 @@ with tab1:
                 df_c = xls_cat.parse(hoja)
                 if "Nivel" in df_c.columns and "Materia" in df_c.columns:
                     for _, f in df_c.iterrows():
-                        niv = normalizer_para_cruce(f.get("Nivel"))
+                        niv = normalizar_para_cruce(f.get("Nivel"))
                         indice_cat.setdefault(niv, []).append({
-                            "mat_norm": normalizer_para_cruce(f.get("Materia")), 
+                            "mat_norm": normalizar_para_cruce(f.get("Materia")), 
                             "subj": str(f.get("Subj")).strip(), 
                             "crse": str(f.get("Crse")).strip()
                         })
@@ -86,8 +86,8 @@ with tab1:
                 
                 resultados = []
                 for idx, fila in df_total.iterrows():
-                    niv_n = normalizer_para_cruce(fila.get("Nivel"))
-                    mat_n = normalizer_para_cruce(fila.get("Nombre de la Materia"))
+                    niv_n = normalizar_para_cruce(fila.get("Nivel"))
+                    mat_n = normalizar_para_cruce(fila.get("Nombre de la Materia"))
                     subj_orig = str(fila.get("Subject")).strip()
                     crse_orig = str(fila.get("Course")).strip()
                     
