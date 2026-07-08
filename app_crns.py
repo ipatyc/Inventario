@@ -55,7 +55,12 @@ st.set_page_config(page_title="Consola Iris Cavazos", page_icon="🎛️", layou
 st.title("🎛️ Consola de Control de Materias e Inyección de NRCs")
 st.markdown("---")
 
-tab1, tab2 = st.tabs(["1️⃣ Proceso: Validación y Generar CSV", "2️⃣ Proceso: Inyección de NRCs (ARGOS)"])
+# Creación de las 3 pestañas solicitadas
+tab1, tab_err, tab3 = st.tabs([
+    "1️⃣ Proceso: Validación y Generar CSV", 
+    "⚠️ Reporte de Errores (Filtro Delta)", 
+    "2️⃣ Proceso: Inyección de NRCs (ARGOS)"
+])
 
 # ============================================================
 # PESTAÑA 1: VALIDACIÓN Y GENERACIÓN DE CSV
@@ -336,9 +341,91 @@ with tab1:
             )
 
 # ============================================================
-# PESTAÑA 2: INYECTAR EN REPORTE ARGOS (CONSTRUIR HOJA "CRNs")
+# PESTAÑA NUEVA: FILTRADO POR REPORTE DE ERRORES (BANNER)
 # ============================================================
-with tab2:
+with tab_err:
+    st.header("⚠️ Extracción Delta por Reporte de Errores (Banner)")
+    st.markdown("Sube el archivo Excel de errores rebotado por Banner para extraer quirúrgicamente solo las filas que fallaron.")
+    
+    file_errores = st.file_uploader("📥 1. Cargar Reporte de Errores de Banner (.xlsx)", type=["xlsx"])
+    
+    st.markdown("---")
+    st.markdown("#### 📄 2. Selecciona el archivo origen que deseas filtrar:")
+    
+    origen_csv = st.radio(
+        "¿De dónde tomamos la base de datos original?",
+        ["Utilizar los CSVs estructurados generados en la Pestaña 1 (En memoria)", "Subir un archivo CSV manualmente de mis carpetas"],
+        key="origen_csv_radio"
+    )
+    
+    dict_csvs_a_procesar = {}
+    
+    if origen_csv == "Utilizar los CSVs estructurados generados en la Pestaña 1 (En memoria)":
+        if st.session_state.csv_files_to_download:
+            st.success(f"✅ Se detectaron {len(st.session_state.csv_files_to_download)} archivos listos en la memoria.")
+            opciones_nombres = list(st.session_state.csv_files_to_download.keys())
+            seleccion_memoria = st.selectbox("Elige el CSV que deseas depurar:", opciones_nombres)
+            if seleccion_memoria:
+                bytes_csv = st.session_state.csv_files_to_download[seleccion_memoria]
+                dict_csvs_a_procesar[seleccion_memoria] = pd.read_csv(io.BytesIO(bytes_csv), encoding="utf-8-sig")
+        else:
+            st.warning("⚠️ No se encontraron archivos en la memoria interna de la sesión. Primero ejecuta la Pestaña 1 o cambia a subida manual.")
+    else:
+        file_csv_manual = st.file_uploader("Subir el archivo CSV original cargado a Banner (.csv)", type=["csv"], key="csv_manual_err")
+        if file_csv_manual:
+            try:
+                dict_csvs_a_procesar[file_csv_manual.name] = pd.read_csv(file_csv_manual, encoding="utf-8-sig")
+            except:
+                dict_csvs_a_procesar[file_csv_manual.name] = pd.read_csv(file_csv_manual, encoding="latin-1")
+                
+    st.markdown("---")
+    num_version = st.number_input("🔢 3. Indica el número de corrección (Versión):", min_value=1, max_value=99, value=1, step=1)
+    
+    if file_errores and dict_csvs_a_procesar:
+        if st.button("🔍 Extraer Filas con Error y Generar Delta", type="primary"):
+            try:
+                # Se descartan las primeras 2 filas (la fila 3 pasa a ser el Header del DataFrame)
+                df_err_excel = pd.read_excel(file_errores, skiprows=2)
+                
+                if "Línea" not in df_err_excel.columns:
+                    st.error("❌ Error de formato: No se encontró la columna llamada exactamente 'Línea' en la fila 3 del reporte.")
+                else:
+                    # Extraer los números de fila únicos de la columna Línea
+                    renglones_errores = df_err_excel["Línea"].dropna().astype(int).unique().tolist()
+                    st.info(f"📋 Renglones detectados con fallas: {renglones_errores}")
+                    
+                    for nombre_archivo, df_datos in dict_csvs_a_procesar.items():
+                        # Mapeo matemático Banner: Línea 1 = Headers, Línea 2 = index 0 de Pandas. 
+                        # Por ende: pandas_index = Línea - 2
+                        indices_validos = [int(r) - 2 for r in renglones_errores if (int(r) - 2) >= 0 and (int(r) - 2) < len(df_datos)]
+                        
+                        df_delta_filtrado = df_datos.iloc[indices_validos]
+                        
+                        if not df_delta_filtrado.empty:
+                            st.success(f"🎯 ¡Filtro completado! Se aislaron {len(df_delta_filtrado)} registros conflictivos de {nombre_archivo}.")
+                            
+                            nombre_limpio = nombre_archivo.rsplit('.', 1)[0] if '.' in nombre_archivo else "Horario"
+                            nombre_final_out = f"{nombre_limpio}_Correccion_V{num_version}.csv"
+                            
+                            csv_bytes_out = df_delta_filtrado.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+                            
+                            st.download_button(
+                                label=f"📥 Descargar {nombre_final_out}",
+                                data=csv_bytes_out,
+                                file_name=nombre_final_out,
+                                mime="text/csv",
+                                key=f"btn_err_dl_{nombre_archivo}",
+                                use_container_width=True
+                            )
+                        else:
+                            st.error(f"❌ Ninguno de los números de 'Línea' ({renglones_errores}) coincide con los rangos reales de {nombre_archivo}.")
+            except Exception as e:
+                st.error(f"❌ Ocurrió un error inesperado al procesar los archivos: {e}")
+
+# ============================================================
+# PESTAÑA 3: INYECTAR EN REPORTE ARGOS (CONSTRUIR HOJA "CRNs")
+# ============================================================
+with tab3:
     st.header("Inyección de NRCs desde Reporte de ARGOS")
     
     mismo_momento = st.session_state.df_corregido is not None
@@ -357,7 +444,7 @@ with tab2:
                 df_base_cruce = st.session_state.df_corregido.copy()
                 dict_bytes_altas = st.session_state.original_files_bytes
     else:
-        st.info("🕒 **Modo Asincrónico (Trabajo de otro día):** Como la app se reinició, no tienes que repetir la Pestaña 1. Sube el resumen descargado junto con tus archivos de ALTAS normales.")
+        st.info("🕒 **Modo Asincrónico (Trabajo de otro día o post-correcciones):** Sube el resumen final limpio/corregido y tus archivos de ALTAS actualizados.")
         
         col_a, col_b, col_c = st.columns(3)
         with col_a:
@@ -457,14 +544,11 @@ with tab2:
             "datocomplementario"
         ]
         
-        # Crear DataFrame unificado vacío con la estructura estricta
         df_cluster = pd.DataFrame(columns=columnas_cluster)
         
-        # Mapear los datos de toda la tabla 'fusion' (que ya junta todos los archivos Excel)
         df_cluster["Periodo"] = fusion["Periodo"].apply(lambda x: format_r_style(x))
         df_cluster["CRN"] = fusion["NRC"].apply(lambda x: format_r_style(x))
         
-        # Extraer la columna Clúster de los Excel originales (con control de acentos)
         if "Clúster" in fusion.columns:
             df_cluster["datocomplementario"] = fusion["Clúster"]
         elif "Cluster" in fusion.columns:
@@ -472,10 +556,8 @@ with tab2:
         else:
             st.warning("⚠️ No se detectó la columna 'Clúster' en los Excel. El campo 'datocomplementario' se exportará vacío.")
             
-        # Reemplazar valores nulos (NaN) por textos vacíos limpios para la plantilla
         df_cluster = df_cluster.fillna("")
         
-        # Convertir a un único CSV unificado
         csv_cluster_bytes = df_cluster.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
         
         st.download_button(
