@@ -223,4 +223,7 @@ with tab1:
                 st.success(f"✅ **{arch}** — ¡Todo perfecto, sin observaciones!")
             else:
                 with st.expander(f"⚠️ **{arch}** — ({total_detalles} renglones con observaciones encontradas)", expanded=True):
-                    quitar_rep = st.checkbox("🔍 Combinar repetidas (Ver solo
+    quitar_rep = st.checkbox("🔍 Combinar repetidas (Ver solo 1 renglón por caso)", value=True, key=f"rep_{arch}")
+    
+    if quitar_rep:
+        df_vista = errores_filas.drop_duplicates(subset=["Materia Excel", "Materia Catálogo", "Subj Original", "Crse Original", "Comentario"])
