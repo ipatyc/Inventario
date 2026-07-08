@@ -341,14 +341,33 @@ with tab1:
             )
 
 # ============================================================
-# PESTAÑA NUEVA: FILTRADO POR REPORTE DE ERRORES (BANNER)
+# PESTAÑA: FILTRADO POR REPORTE DE ERRORES (BANNER) - ACTUAlIZADA
 # ============================================================
 with tab_err:
     st.header("⚠️ Extracción Delta por Reporte de Errores (Banner)")
-    st.markdown("Sube el archivo Excel de errores rebotado por Banner para extraer quirúrgicamente solo las filas que fallaron.")
+    st.markdown("Aísla quirúrgicamente los registros que fallaron en Banner, ya sea subiendo el reporte oficial o escribiendo los números directamente.")
     
-    file_errores = st.file_uploader("📥 1. Cargar Reporte de Errores de Banner (.xlsx)", type=["xlsx"])
+    # 🆕 NUEVA OPCIÓN: Selección del modo de entrada para los errores
+    metodo_input = st.radio(
+        "🛠️ Selecciona el método para ingresar las líneas con error:",
+        ["Subir archivo Excel de Banner", "Escribir números de línea manualmente"],
+        horizontal=True,
+        key="metodo_input_err"
+    )
     
+    file_errores = None
+    txt_errores = ""
+    input_valido = False
+    
+    if metodo_input == "Subir archivo Excel de Banner":
+        file_errores = st.file_uploader("📥 Cargar Reporte de Errores de Banner (.xlsx)", type=["xlsx"])
+        if file_errores:
+            input_valido = True
+    else:
+        txt_errores = st.text_input("✍️ Escribe las líneas separadas por comas (Ejemplo: 4, 18, 25, 102):", help="Coloca los números de renglón exactos que te arrojó Banner.")
+        if txt_errores.strip():
+            input_valido = True
+            
     st.markdown("---")
     st.markdown("#### 📄 2. Selecciona el archivo origen que deseas filtrar:")
     
@@ -381,22 +400,34 @@ with tab_err:
     st.markdown("---")
     num_version = st.number_input("🔢 3. Indica el número de corrección (Versión):", min_value=1, max_value=99, value=1, step=1)
     
-    if file_errores and dict_csvs_a_procesar:
+    if input_valido and dict_csvs_a_procesar:
         if st.button("🔍 Extraer Filas con Error y Generar Delta", type="primary"):
             try:
-                # Se descartan las primeras 2 filas (la fila 3 pasa a ser el Header del DataFrame)
-                df_err_excel = pd.read_excel(file_errores, skiprows=2)
+                renglones_errores = []
                 
-                if "Línea" not in df_err_excel.columns:
-                    st.error("❌ Error de formato: No se encontró la columna llamada exactamente 'Línea' en la fila 3 del reporte.")
-                else:
-                    # Extraer los números de fila únicos de la columna Línea
+                # Procesamiento según la opción seleccionada
+                if metodo_input == "Subir archivo Excel de Banner":
+                    df_err_excel = pd.read_excel(file_errores, skiprows=2)
+                    if "Línea" not in df_err_excel.columns:
+                        st.error("❌ Error de formato: No se encontró la columna llamada exactamente 'Línea' en la fila 3 del reporte.")
+                        st.stop()
                     renglones_errores = df_err_excel["Línea"].dropna().astype(int).unique().tolist()
-                    st.info(f"📋 Renglones detectados con fallas: {renglones_errores}")
+                else:
+                    # 🆕 Procesamiento manual de texto a lista de enteros
+                    partes = txt_errores.split(",")
+                    for p in partes:
+                        p_clean = p.strip()
+                        if p_clean.isdigit():
+                            renglones_errores.append(int(p_clean))
+                    renglones_errores = list(set(renglones_errores)) # Eliminar duplicados si los hay
+                
+                if not renglones_errores:
+                    st.error("❌ No se lograron identificar números de línea válidos. Revisa tu archivo o texto escrito.")
+                else:
+                    st.info(f"📋 Renglones detectados con fallas: {sorted(renglones_errores)}")
                     
                     for nombre_archivo, df_datos in dict_csvs_a_procesar.items():
-                        # Mapeo matemático Banner: Línea 1 = Headers, Línea 2 = index 0 de Pandas. 
-                        # Por ende: pandas_index = Línea - 2
+                        # Mapeo matemático Banner: Línea - 2
                         indices_validos = [int(r) - 2 for r in renglones_errores if (int(r) - 2) >= 0 and (int(r) - 2) < len(df_datos)]
                         
                         df_delta_filtrado = df_datos.iloc[indices_validos]
@@ -420,7 +451,7 @@ with tab_err:
                         else:
                             st.error(f"❌ Ninguno de los números de 'Línea' ({renglones_errores}) coincide con los rangos reales de {nombre_archivo}.")
             except Exception as e:
-                st.error(f"❌ Ocurrió un error inesperado al procesar los archivos: {e}")
+                st.error(f"❌ Ocurrió un error inesperado al procesar los datos: {e}")
 
 # ============================================================
 # PESTAÑA 3: INYECTAR EN REPORTE ARGOS (CONSTRUIR HOJA "CRNs")
@@ -535,37 +566,4 @@ with tab3:
         st.markdown("---")
         st.markdown("#### 🧩 Archivo de Carga (Formato Clúster)")
         
-        columnas_cluster = [
-            "Periodo", "CRN", "Tipo.de.Reunión", "Fecha.Inicio", "Fecha.Fin", 
-            "Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab", "horarioIni", 
-            "horarioFin", "Inicio.de.sesión", "edificio", "salon", 
-            "Tipo.de.horario", "indCategoria", "idInstructor", 
-            "responsabilidad", "Ind.principal", "ind.sobre.paso", 
-            "datocomplementario"
-        ]
-        
-        df_cluster = pd.DataFrame(columns=columnas_cluster)
-        
-        df_cluster["Periodo"] = fusion["Periodo"].apply(lambda x: format_r_style(x))
-        df_cluster["CRN"] = fusion["NRC"].apply(lambda x: format_r_style(x))
-        
-        if "Clúster" in fusion.columns:
-            df_cluster["datocomplementario"] = fusion["Clúster"]
-        elif "Cluster" in fusion.columns:
-            df_cluster["datocomplementario"] = fusion["Cluster"]
-        else:
-            st.warning("⚠️ No se detectó la columna 'Clúster' en los Excel. El campo 'datocomplementario' se exportará vacío.")
-            
-        df_cluster = df_cluster.fillna("")
-        
-        csv_cluster_bytes = df_cluster.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-        
-        st.download_button(
-            label="🧩 📥 DESCARGAR CSV DE CARGA DE CLÚSTER UNIFICADO",
-            data=csv_cluster_bytes,
-            file_name="carga_cluster_unificado.csv",
-            mime="text/csv",
-            use_container_width=True,
-            type="primary",
-            key="btn_csv_cluster_final"
-        )
+        columnas_cluster =
