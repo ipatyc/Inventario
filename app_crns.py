@@ -110,7 +110,7 @@ with tab1:
                 if hojas_reales:
                     df_a = xls_a.parse(hojas_reales[0])
                     
-                    # 🚨 FILTRO ANTI-FANTASMAS (Evita el problema de renglones vacíos al estilo R)
+                    # 🚨 FILTRO ANTI-FANTASMAS
                     essential_cols = [c for c in ["Periodo", "Campus", "Subject", "Course"] if c in df_a.columns]
                     if essential_cols:
                         df_a = df_a.dropna(subset=essential_cols, how="all")
@@ -243,8 +243,8 @@ with tab1:
                             "Comentario": st.column_config.TextColumn("Diagnóstico", width="medium"),
                             "Subj Original": st.column_config.TextColumn("Subj (Excel)", width="small"),
                             "Crse Original": st.column_config.TextColumn("Crse (Excel)", width="small"),
-                            "Subj Sugerido": st.column_config.TextColumn("Subj Sugerido ✍️", width="small", help="¡Doble clic para escribir a mano!"),
-                            "Crse Sugerido": st.column_config.TextColumn("Crse Sugerido ✍️", width="small", help="¡Doble clic para escribir a mano!"),
+                            "Subj Sugerido": st.column_config.TextColumn("Subj Sugerido ✍️", width="small"),
+                            "Crse Sugerido": st.column_config.TextColumn("Crse Sugerido ✍️", width="small"),
                         },
                         key=f"editor_{arch}",
                         use_container_width=True
@@ -282,7 +282,6 @@ with tab1:
                 for name, sub in corregido.groupby("ArchivoOrigen"):
                     resultado_df = pd.DataFrame()
                     
-                    # 🚨 CLONACIÓN EXACTA DE TU CODIGO BASE EN R (Mapeo de nombres, mutate y select)
                     resultado_df["PERIODO"] = sub["Periodo"].apply(lambda x: format_r_style(x))
                     resultado_df["SEDE"] = sub["Campus"].apply(lambda x: format_r_style(x))
                     resultado_df["SUBJ"] = sub["Subject"].apply(lambda x: format_r_style(x))
@@ -298,7 +297,6 @@ with tab1:
                     resultado_df["MODODECALIFICAR"] = sub["Modo de Calificar"].apply(lambda x: format_r_style(x))
                     resultado_df["SESION"] = sub["Sesion"].apply(lambda x: format_r_style(x))
                     
-                    # Orden idéntico al de tu select final en R
                     columnas_ordenadas = ["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS",
                                           "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO",
                                           "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION"]
@@ -336,17 +334,6 @@ with tab1:
                 type="primary",
                 key="zip_p1_btn"
             )
-            
-            st.markdown("---")
-            st.markdown("📄 **Descargar CSVs individuales (uno por uno):**")
-            for csv_filename, csv_bytes in st.session_state.csv_files_to_download.items():
-                st.download_button(
-                    label=f"📥 Descargar {csv_filename}",
-                    data=csv_bytes,
-                    file_name=csv_filename,
-                    mime="text/csv",
-                    key=f"p1_dl_{csv_filename}"
-                )
 
 # ============================================================
 # PESTAÑA 2: INYECTAR EN REPORTE ARGOS (CONSTRUIR HOJA "CRNs")
@@ -454,3 +441,49 @@ with tab2:
                 )
             else:
                 st.warning(f"⚠️ El archivo '{name}' se detectó en el resumen, pero no se subió en el bloque de ALTAS de esta pestaña.")
+
+        # ============================================================
+        # 🧩 GENERACIÓN DE CSV DE CLÚSTER UNIFICADO (TODOS LOS EXCEL EN UNO SOLO)
+        # ============================================================
+        st.markdown("---")
+        st.markdown("#### 🧩 Archivo de Carga (Formato Clúster)")
+        
+        columnas_cluster = [
+            "Periodo", "CRN", "Tipo.de.Reunión", "Fecha.Inicio", "Fecha.Fin", 
+            "Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab", "horarioIni", 
+            "horarioFin", "Inicio.de.sesión", "edificio", "salon", 
+            "Tipo.de.horario", "indCategoria", "idInstructor", 
+            "responsabilidad", "Ind.principal", "ind.sobre.paso", 
+            "datocomplementario"
+        ]
+        
+        # Crear DataFrame unificado vacío con la estructura estricta
+        df_cluster = pd.DataFrame(columns=columnas_cluster)
+        
+        # Mapear los datos de toda la tabla 'fusion' (que ya junta todos los archivos Excel)
+        df_cluster["Periodo"] = fusion["Periodo"].apply(lambda x: format_r_style(x))
+        df_cluster["CRN"] = fusion["NRC"].apply(lambda x: format_r_style(x))
+        
+        # Extraer la columna Clúster de los Excel originales (con control de acentos)
+        if "Clúster" in fusion.columns:
+            df_cluster["datocomplementario"] = fusion["Clúster"]
+        elif "Cluster" in fusion.columns:
+            df_cluster["datocomplementario"] = fusion["Cluster"]
+        else:
+            st.warning("⚠️ No se detectó la columna 'Clúster' en los Excel. El campo 'datocomplementario' se exportará vacío.")
+            
+        # Reemplazar valores nulos (NaN) por textos vacíos limpios para la plantilla
+        df_cluster = df_cluster.fillna("")
+        
+        # Convertir a un único CSV unificado
+        csv_cluster_bytes = df_cluster.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+        
+        st.download_button(
+            label="🧩 📥 DESCARGAR CSV DE CARGA DE CLÚSTER UNIFICADO",
+            data=csv_cluster_bytes,
+            file_name="carga_cluster_unificado.csv",
+            mime="text/csv",
+            use_container_width=True,
+            type="primary",
+            key="btn_csv_cluster_final"
+        )
