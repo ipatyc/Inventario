@@ -15,7 +15,6 @@ HOJA_ALTAS = "ALTAS"
 HOJA_SALIDA_NRC = "nrc"
 UMBRAL_FUZZY = 0.82  
 
-# Parámetros exactos de R para clonar su comportamiento de write.csv()
 CSV_KWARGS_R = {
     'index': False,
     'encoding': 'utf-8',
@@ -52,21 +51,18 @@ def limpia_seccion_interna(x):
     return s
 
 def obtener_base_y_version(filename):
-    """
-    Analiza el nombre del archivo para extraer el nombre raíz del campus
-    y detectar el número de versión si cuenta con el sufijo _V1, _V2, etc.
-    """
+    """Extrae el nombre base de un archivo y su número de versión (V1, V2...)"""
     if not filename: return "", 0
     s = filename.upper().strip()
     for ext in [".CSV", ".XLSX", ".XLS"]:
         if s.endswith(ext): s = s[:-len(ext)]
     
-    # Buscar patrones como _V1, _V2... al final del nombre
     match = re.search(r'_V(\d+)$', s)
     if match:
-        version = int(match.group(1))
-        base = s[:match.start()].strip()
-        return base, version
+        return s[:match.start()].strip(), int(match.group(1))
+    match = re.search(r'V(\d+)$', s)
+    if match:
+        return s[:match.start()].strip('_ '), int(match.group(1))
     return s.strip(), 0
 
 # Inicialización de estados en memoria de Streamlit
@@ -76,6 +72,8 @@ if "raw_altas" not in st.session_state: st.session_state.raw_altas = None
 if "ready_for_download" not in st.session_state: st.session_state.ready_for_download = False
 if "zip_file_bytes" not in st.session_state: st.session_state.zip_file_bytes = None
 if "csv_files_to_download" not in st.session_state: st.session_state.csv_files_to_download = {}
+# Memoria nueva para el ZIP final de ARGOS
+if "final_argos_zip" not in st.session_state: st.session_state.final_argos_zip = None
 
 st.set_page_config(page_title="Consola Iris Cavazos", page_icon="🎛️", layout="wide")
 st.title("🎛️ Consola de Control de Materias e Inyección de NRCs (Flujo Multi-CSV)")
@@ -369,177 +367,47 @@ with tab_err:
 # ============================================================
 with tab3:
     st.header("Inyección Masiva de NRCs y Construcción de Clústeres")
-    st.markdown("Sube tu reporte de ARGOS, los CSV finales (la app elegirá la versión más alta automáticamente si hay repetidos) y tus archivos Excel originales.")
+    st.markdown("Sube tu reporte de ARGOS, los CSV originales + V1/V2, y tus archivos Excel originales.")
     
     col_a, col_b, col_c = st.columns(3)
     with col_a:
         file_argos = st.file_uploader("📊 1. Cargar Reporte ARGOS (.csv)", type=["csv"])
     with col_b:
-        files_csv_finales = st.file_uploader("📝 2. Sube los CSVs finales (Acepta originales y Versiones _V1/_V2...)", type=["csv"], accept_multiple_files=True)
+        files_csv_finales = st.file_uploader("📝 2. Sube los CSVs (Acepta originales y Versiones V1/V2...)", type=["csv"], accept_multiple_files=True)
     with col_c:
         files_xlsx_originales = st.file_uploader("📁 3. Sube los archivos EXCEL originales (.xlsx)", type=["xlsx"], accept_multiple_files=True)
         
     if file_argos and files_csv_finales and files_xlsx_originales:
         if st.button("🚀 Ejecutar Cruce Inteligente e Inyección", type="primary"):
             try:
-                # 1. Cargar y normalizar encabezados del reporte de ARGOS
+                # ---------------------------------------------------------
+                # 1. LEER ARGOS Y NORMALIZAR COLUMNAS
+                # ---------------------------------------------------------
                 argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip')
                 argos_df.columns = [str(c).replace('"', '').replace("'", "").strip() for c in argos_df.columns]
                 
-                # Mapear columnas críticas de ARGOS
                 mapa_columnas_argos = {}
                 for col in argos_df.columns:
                     col_upper = col.upper()
-                    if col_upper in ["PERIODO", "ESTATUS", "NRC", "ÁREA", "GRUPO", "NIVEL", "CAMPUS"]:
+                    if col_upper in ["PERIODO", "NRC", "ÁREA", "GRUPO"]:
                         mapa_columnas_argos[col_upper] = col
                     elif "CURSO" in col_upper:
                         mapa_columnas_argos["CURSO"] = col
                 
-                columnas_requeridas = ["PERIODO", "ÁREA", "CURSO", "GRUPO", "NRC"]
-                faltantes = [c for c in columnas_requeridas if c not in mapa_columnas_argos]
-                if faltantes:
-                    st.error(f"❌ Columnas requeridas {faltantes} no detectadas en ARGOS. Columnas: {list(argos_df.columns)}")
-                    st.stop()
-                
-                # Generar llaves estándar de cruce para ARGOS
+                # Crear llaves de cruce para ARGOS
                 argos_df["_k_per"] = argos_df[mapa_columnas_argos["PERIODO"]].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
                 argos_df["_k_sub"] = argos_df[mapa_columnas_argos["ÁREA"]].apply(normalizar_para_cruce)
                 argos_df["_k_crs"] = argos_df[mapa_columnas_argos["CURSO"]].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
                 argos_df["_k_sec"] = argos_df[mapa_columnas_argos["GRUPO"]].apply(limpia_seccion_interna)
                 
-                # 2. Filtrado Inteligente de Versiones CSV (Elegir la más alta por Campus)
-                dict_agrupado_csvs = {}
+                # ---------------------------------------------------------
+                # 2. AGRUPAR Y CONSOLIDAR CSVS (Original -> V1 -> V2...)
+                # ---------------------------------------------------------
+                dict_csvs_agrupados = {}
                 for fc in files_csv_finales:
                     base_name, version = obtener_base_y_version(fc.name)
-                    if base_name not in dict_agrupado_csvs or version > dict_agrupado_csvs[base_name]["version"]:
-                        dict_agrupado_csvs[base_name] = {"version": version, "file_obj": fc}
+                    if base_name not in dict_csvs_agrupados:
+                        dict_csvs_agrupados[base_name] = {}
+                    dict_csvs_agrupados[base_name][version] = fc
                 
-                # 3. Mapear Excels originales por su nombre raíz
-                dict_excels_originales = {}
-                for fx in files_xlsx_originales:
-                    base_x, _ = obtener_base_y_version(fx.name)
-                    dict_excels_originales[base_x] = {"filename": fx.name, "bytes": fx.getvalue()}
-                
-                excels_inyectados_zip = io.BytesIO()
-                listado_maestro_clusters = []
-                xlsx_procesados = 0
-                
-                with zipfile.ZipFile(excels_inyectados_zip, "w", zipfile.ZIP_DEFLATED) as zip_out:
-                    
-                    # 4. Iterar sobre los CSV elegidos (uno definitivo por campus)
-                    for campus_raiz, info_csv in dict_agrupado_csvs.items():
-                        fc_objeto = info_csv["file_obj"]
-                        df_csv = pd.read_csv(io.BytesIO(fc_objeto.getvalue()), encoding="utf-8")
-                        
-                        # Llaves estándar en el CSV
-                        df_csv["_k_per"] = df_csv["PERIODO"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
-                        df_csv["_k_sub"] = df_csv["SUBJ"].apply(normalizar_para_cruce)
-                        df_csv["_k_crs"] = df_csv["COURSE"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
-                        df_csv["_k_sec"] = df_csv["SECCION"].apply(limpia_seccion_interna)
-                        
-                        # Realizar fusión para atrapar el NRC de ARGOS
-                        llaves_match = ["_k_per", "_k_sub", "_k_crs", "_k_sec"]
-                        col_nrc_real = mapa_columnas_argos["NRC"]
-                        
-                        fusion = df_csv.merge(argos_df[llaves_match + [col_nrc_real]], on=llaves_match, how="left")
-                        if col_nrc_real != "NRC" and col_nrc_real in fusion.columns:
-                            fusion["NRC"] = fusion[col_nrc_real]
-                            fusion = fusion.drop(columns=[col_nrc_real])
-                        
-                        # Limpiar columnas temporales del dataframe corregido
-                        columnas_limpias = [c for c in fusion.columns if not c.startswith("_k_")]
-                        df_csv_con_nrc = fusion[columnas_limpias].copy()
-                        
-                        # Garantizar que el NRC sea la PRIMERA columna
-                        if "NRC" in df_csv_con_nrc.columns:
-                            orden_columnas = ["NRC"] + [c for c in df_csv_con_nrc.columns if c != "NRC"]
-                            df_csv_con_nrc = df_csv_con_nrc[orden_columnas]
-                        else:
-                            df_csv_con_nrc.insert(0, "NRC", np.nan)
-                        
-                        # 5. Inyectar la pestaña 'nrc' en su respectivo archivo Excel
-                        if campus_raiz in dict_excels_originales:
-                            ex_info = dict_excels_originales[campus_raiz]
-                            wb = openpyxl.load_workbook(io.BytesIO(ex_info["bytes"]))
-                            
-                            # Borrar pestaña si ya existía para evitar duplicados
-                            if HOJA_SALIDA_NRC in wb.sheetnames:
-                                del wb[HOJA_SALIDA_NRC]
-                            
-                            ws = wb.create_sheet(title=HOJA_SALIDA_NRC)
-                            
-                            # Copiar los datos del CSV final con el NRC al frente
-                            ws.append(list(df_csv_con_nrc.columns))
-                            for fila_datos in df_csv_con_nrc.values:
-                                ws.append(list(fila_datos))
-                            
-                            # 6. Extraer los clústeres leyendo la hoja original 'ALTAS' del Excel
-                            if HOJA_ALTAS in wb.sheetnames:
-                                sheet_altas = wb[HOJA_ALTAS]
-                                data_altas = sheet_altas.values
-                                cols_altas = next(data_altas)
-                                df_excel_altas = pd.DataFrame(data_altas, columns=cols_altas)
-                                
-                                # Detectar de forma flexible la columna del clúster en el Excel original
-                                col_cluster_excel = None
-                                for c_ex in df_excel_altas.columns:
-                                    if str(c_ex).strip().upper() in ["CLUSTER", "CLÚSTER", "DATO COMPLEMENTARIO", "DATOCOMPLEMENTARIO"]:
-                                        col_cluster_excel = c_ex
-                                        break
-                                
-                                if col_cluster_excel:
-                                    # Generar dataframe temporal del clúster recopilando el NRC calculado
-                                    df_cl_temp = pd.DataFrame()
-                                    df_cl_temp["Periodo"] = df_csv_con_nrc["PERIODO"].apply(format_r_string)
-                                    df_cl_temp["CRN"] = pd.to_numeric(df_csv_con_nrc["NRC"], errors='coerce').astype('Int64')
-                                    df_cl_temp["datocomplementario"] = df_excel_altas[col_cluster_excel].iloc[:len(df_csv_con_nrc)].values
-                                    listado_maestro_clusters.append(df_cl_temp)
-                            
-                            # Guardar el libro modificado
-                            excel_buffer = io.BytesIO()
-                            wb.save(excel_buffer)
-                            zip_out.writestr(ex_info["filename"], excel_buffer.getvalue())
-                            xlsx_procesados += 1
-                        else:
-                            st.warning(f"⚠️ El campus `{campus_raiz}` (del CSV `{fc_objeto.name}`) no encontró un archivo Excel con el mismo nombre.")
-                
-                # 7. Renderizar botones de descarga en la interfaz
-                st.success(f"🎉 ¡Inyección masiva completada! Se generó la pestaña '{HOJA_SALIDA_NRC}' en {xlsx_procesados} archivos Excel.")
-                st.markdown("### 📥 Panel de Resultados Listos")
-                
-                if xlsx_procesados > 0:
-                    st.download_button(
-                        label="📁 📥 DESCARGAR TODOS LOS EXCELES MODIFICADOS (.ZIP)",
-                        data=excels_inyectados_zip.getvalue(),
-                        file_name="archivos_excel_con_hoja_nrc.zip",
-                        mime="application/zip",
-                        use_container_width=True,
-                        type="primary"
-                    )
-                
-                # Generar el CSV único unificado con todos los clústeres recolectados
-                if listado_maestro_clusters:
-                    df_cluster_total = pd.concat(listado_maestro_clusters, ignore_index=True)
-                    columnas_maestras_r = [
-                        "Periodo", "CRN", "Tipo.de.Reunión", "Fecha.Inicio", "Fecha.Fin", "Dom", "Lun", "Mar", 
-                        "Mie", "Jue", "Vie", "Sab", "horarioIni", "horarioFin", "Inicio.de.sesión", "edificio", 
-                        "salon", "Tipo.de.horario", "indCategoria", "idInstructor", "responsabilidad", 
-                        "Ind.principal", "ind.sobre.paso", "datocomplementario"
-                    ]
-                    for col in columnas_maestras_r:
-                        if col not in df_cluster_total.columns:
-                            df_cluster_total[col] = np.nan
-                            
-                    df_cluster_total = df_cluster_total[columnas_maestras_r]
-                    csv_cluster_bytes = df_cluster_total.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                    
-                    st.download_button(
-                        label="🧩 📥 DESCARGAR ARCHIVO DE CLÚSTERES UNIFICADO TOTAL",
-                        data=csv_cluster_bytes,
-                        file_name="cluster_unificado.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-                    
-            except Exception as e:
-                st.error(f"❌ Error crítico durante el procesamiento: {str(e)}")
+                dict_csvs_finalizados =
