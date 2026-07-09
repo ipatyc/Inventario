@@ -23,6 +23,9 @@ CSV_KWARGS_R = {
     'na_rep': 'NA'                   
 }
 
+# ---> INYECTA ESTA LÍNEA AQUÍ <---
+COLUMNAS_CLUSTER_FINAL = ["Periodo", "CRN", "datocomplementario"]
+
 def quitar_acentos(t):
     if pd.isna(t) or t is None: 
         return ""
