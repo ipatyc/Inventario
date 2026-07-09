@@ -451,20 +451,36 @@ with tab3:
     if file_argos and files_csv_finales and files_xlsx_originales:
         if st.button("🚀 Procesar Cruce e Inyectar Pestaña NRC + Clúster", type="primary"):
             try:
-                # 1. LEER ARGOS Y APLICAR MUTATE (REGLAS DE R)
+                # 1. LEER ARGOS Y LIMPIAR COLUMNAS
                 argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip')
-                argos_df.columns = [str(c).replace('"', '').replace("'", "").strip() for c in argos_df.columns]
                 
+                # Normalización estricta de nombres de columnas para evitar fallos por puntos o espacios
+                argos_df.columns = [
+                    re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) 
+                    for c in argos_df.columns
+                ]
+                
+                # Mapeo flexible por si acaso quedó un punto o dos
+                col_curso = "No.Curso" if "No.Curso" in argos_df.columns else ("No..Curso" if "No..Curso" in argos_df.columns else None)
+                
+                if col_curso is None:
+                    # Si no encuentra ninguna variación, intentamos buscar una columna que contenga "Curso"
+                    columnas_candidatas = [c for c in argos_df.columns if "Curso" in c]
+                    if columnas_candidatas:
+                        col_curso = columnas_candidatas[0]
+                    else:
+                        raise KeyError("No se encontró la columna del número de curso (ej. 'No..Curso') en el reporte de ARGOS.")
+
                 argos_df["Periodo"] = argos_df["Periodo"].apply(_local_limpiar_texto)
                 argos_df["Nivel"] = argos_df["Nivel"].apply(_local_normalizar_mayusculas)
                 argos_df["Área"] = argos_df["Área"].apply(_local_normalizar_mayusculas)
-                argos_df["No..Curso"] = argos_df["No..Curso"].apply(_local_limpiar_texto)
+                argos_df[col_curso] = argos_df[col_curso].apply(_local_limpiar_texto)
                 argos_df["Grupo"] = argos_df["Grupo"].apply(_local_seccion_a_dos_digitos)
                 
                 argos_df["_llave_maestra"] = (argos_df["Periodo"] + "_" + 
                                               argos_df["Nivel"] + "_" + 
                                               argos_df["Área"] + "_" + 
-                                              argos_df["No..Curso"] + "_" + 
+                                              argos_df[col_curso] + "_" + 
                                               argos_df["Grupo"])
                 
                 argos_df = argos_df.drop_duplicates(subset=["_llave_maestra"])
