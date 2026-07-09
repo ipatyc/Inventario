@@ -34,6 +34,17 @@ def normalizar_para_cruce(t):
 def similitud(a, b): 
     return SequenceMatcher(None, a, b).ratio()
 
+def limpiar_clave_texto(val):
+    """Garantiza la conversión de cualquier tipo (float, int, NaN) a un string limpio para llaves de cruce"""
+    if pd.isna(val) or val is None:
+        return ""
+    s = str(val).strip()
+    if s.lower() == "nan" or s == "":
+        return ""
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
 def format_r_string(val):
     if pd.isna(val) or val is None:
         return np.nan
@@ -48,7 +59,7 @@ def limpia_seccion_interna(x):
     if pd.isna(x): 
         return ""
     s = str(x).strip()
-    if s.lower() == "nan": 
+    if s.lower() == "nan" or s == "": 
         return ""
     if s.endswith(".0"): 
         s = s[:-2]
@@ -60,7 +71,7 @@ def obtener_base_y_version(filename):
     """Extrae el nombre base de un archivo y su número de versión (V1, V2...)"""
     if not filename: 
         return "", 0
-    s = filename.upper().strip()
+    s = str(filename).upper().strip()
     for ext in [".CSV", ".XLSX", ".XLS"]:
         if s.endswith(ext): 
             s = s[:-len(ext)]
@@ -428,9 +439,10 @@ with tab3:
                     elif "CURSO" in col_upper:
                         mapa_columnas_argos["CURSO"] = col
                 
-                argos_df["_k_per"] = argos_df[mapa_columnas_argos["PERIODO"]].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                # Blindaje aplicado usando limpiar_clave_texto en lugar de lambdas inline propensas a fallos por tipo float
+                argos_df["_k_per"] = argos_df[mapa_columnas_argos["PERIODO"]].apply(limpiar_clave_texto)
                 argos_df["_k_sub"] = argos_df[mapa_columnas_argos["ÁREA"]].apply(normalizar_para_cruce)
-                argos_df["_k_crs"] = argos_df[mapa_columnas_argos["CURSO"]].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                argos_df["_k_crs"] = argos_df[mapa_columnas_argos["CURSO"]].apply(limpiar_clave_texto)
                 argos_df["_k_sec"] = argos_df[mapa_columnas_argos["GRUPO"]].apply(limpia_seccion_interna)
                 
                 # 2. AGRUPAR Y CONSOLIDAR CSVS
@@ -449,16 +461,16 @@ with tab3:
                         continue
                     
                     df_base_csv = pd.read_csv(io.BytesIO(versiones[0].getvalue()), encoding="utf-8")
-                    df_base_csv["_k_per"] = df_base_csv["PERIODO"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
-                    df_base_csv["_k_sed"] = df_base_csv["SEDE"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                    df_base_csv["_k_per"] = df_base_csv["PERIODO"].apply(limpiar_clave_texto)
+                    df_base_csv["_k_sed"] = df_base_csv["SEDE"].apply(limpiar_clave_texto)
                     df_base_csv["_k_sec"] = df_base_csv["SECCION"].apply(limpia_seccion_interna)
                     
                     for v in sorted(versiones.keys()):
                         if v == 0: 
                             continue
                         df_v = pd.read_csv(io.BytesIO(versiones[v].getvalue()), encoding="utf-8")
-                        df_v["_k_per"] = df_v["PERIODO"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
-                        df_v["_k_sed"] = df_v["SEDE"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                        df_v["_k_per"] = df_v["PERIODO"].apply(limpiar_clave_texto)
+                        df_v["_k_sed"] = df_v["SEDE"].apply(limpiar_clave_texto)
                         df_v["_k_sec"] = df_v["SECCION"].apply(limpia_seccion_interna)
                         
                         df_v_unique = df_v[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates()
@@ -487,12 +499,11 @@ with tab3:
                                 ws_altas = wb[HOJA_ALTAS]
                                 data = ws_altas.values
                                 cols = next(data)
-                                # Blindaje contra columnas nulas o vacías leídas desde Excel
                                 cols = [str(c).strip() if c is not None else f"Unnamed_{i}" for i, c in enumerate(cols)]
                                 df_excel = pd.DataFrame(data, columns=cols)
                                 
-                                df_excel["_k_per"] = df_excel["Periodo"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
-                                df_excel["_k_sed"] = df_excel["Campus"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                                df_excel["_k_per"] = df_excel["Periodo"].apply(limpiar_clave_texto)
+                                df_excel["_k_sed"] = df_excel["Campus"].apply(limpiar_clave_texto)
                                 df_excel["_k_sec"] = df_excel["Sección"].apply(limpia_seccion_interna)
                                 
                                 df_csv_subset = df_csv_perfecto[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates()
@@ -501,9 +512,9 @@ with tab3:
                                 df_excel["Subject"] = df_excel["SUBJ"].combine_first(df_excel["Subject"])
                                 df_excel["Course"] = df_excel["COURSE"].combine_first(df_excel["Course"])
                                 
-                                # B) Cruzar el Excel corregido con ARGOS para sacar el NRC
+                                # Cruzar el Excel corregido con ARGOS para sacar el NRC
                                 df_excel["_k_sub"] = df_excel["Subject"].apply(normalizar_para_cruce)
-                                df_excel["_k_crs"] = df_excel["Course"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                                df_excel["_k_crs"] = df_excel["Course"].apply(limpiar_clave_texto)
                                 
                                 llaves_argos = ["_k_per", "_k_sub", "_k_crs", "_k_sec"]
                                 df_final_excel = df_excel.merge(argos_df[llaves_argos + [mapa_columnas_argos["NRC"]]], on=llaves_argos, how="left")
@@ -511,7 +522,6 @@ with tab3:
                                 if mapa_columnas_argos["NRC"] != "NRC":
                                     df_final_excel["NRC"] = df_final_excel[mapa_columnas_argos["NRC"]]
                                 
-                                # Blindaje explícito contra tipos None en los nombres de columnas
                                 cols_to_drop = [c for c in df_final_excel.columns if (isinstance(c, str) and c.startswith("_k_")) or c in ["SUBJ", "COURSE", mapa_columnas_argos.get("NRC")]]
                                 df_final_excel.drop(columns=[c for c in cols_to_drop if c in df_final_excel.columns], inplace=True)
                                 
