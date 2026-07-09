@@ -358,213 +358,170 @@ with tab1:
             )
 
 # ============================================================
-# PESTAÑA 2: CAJA DE HERRAMIENTAS DE CORRECCIÓN (ABIERTA)
+# PESTAÑA 2: REPORTE DE ERRORES Y CORRECCIÓN (FLUJO SECUENCIAL)
 # ============================================================
 with tab_err:
-    st.header("⚠️ Caja de Herramientas de Corrección (Banner)")
-    st.markdown("Procesos independientes para extraer errores o inyectar correcciones en tus archivos.")
+    st.header("⚠️ Reporte de Errores y Ensamblaje de Correcciones")
+    st.markdown("Extrae los renglones con error, corrígelos (en Excel o en vivo) y vuelve a inyectarlos al archivo original.")
     
-    herramienta = st.radio(
-        "🛠️ ¿Qué proceso deseas realizar?", 
-        [
-            "✂️ 1. Extraer líneas con error (Generar fragmento Delta)", 
-            "💉 2. Inyectar fragmento corregido (Generar CSV Final)",
-            "📝 3. Editor Libre (Modificar un CSV completo en vivo)"
-        ],
-        horizontal=False
-    )
+    # --- PASO 1: DEFINIR ERRORES Y CSV BASE ---
+    st.subheader("1️⃣ Identificar Errores y CSV Base")
+    col_err1, col_err2 = st.columns(2)
+    with col_err1:
+        metodo_input = st.radio("🛠️ Ingreso de líneas fallidas:", ["Subir archivo Excel de Banner", "Escribir números de línea manualmente"])
+        file_errores = st.file_uploader("📥 Reporte de Errores (.xlsx)", type=["xlsx"]) if metodo_input == "Subir archivo Excel de Banner" else None
+        txt_errores = st.text_input("✍️ Líneas (Ej. 4, 18):") if metodo_input == "Escribir números de línea manualmente" else ""
+        
+    with col_err2:
+        origen_csv = st.radio("📂 ¿Qué CSV base vas a usar?", ["Utilizar un CSV de la Pestaña 1", "Subir un CSV completo desde mi equipo"])
+        dict_csvs_a_procesar = {}
+        if origen_csv == "Utilizar un CSV de la Pestaña 1":
+            if st.session_state.csv_files_to_download:
+                sel = st.selectbox("Elige el CSV base:", list(st.session_state.csv_files_to_download.keys()))
+                if sel: dict_csvs_a_procesar[sel] = pd.read_csv(io.BytesIO(st.session_state.csv_files_to_download[sel]), encoding="utf-8")
+            else:
+                st.warning("⚠️ No hay CSVs generados en memoria.")
+        else:
+            file_csv_manual = st.file_uploader("Sube el CSV base original", type=["csv"])
+            if file_csv_manual: dict_csvs_a_procesar[file_csv_manual.name] = pd.read_csv(file_csv_manual, encoding="utf-8")
+
+    # Mapear los índices (renglones) exactos
+    indices_error = []
+    if file_errores or txt_errores.strip():
+        if metodo_input == "Subir archivo Excel de Banner" and file_errores:
+            df_err_excel = pd.read_excel(file_errores, skiprows=2)
+            renglones = df_err_excel["Línea"].dropna().astype(int).unique().tolist()
+            indices_error = [r - 2 for r in renglones]
+        elif metodo_input != "Subir archivo Excel de Banner" and txt_errores.strip():
+            renglones = [int(p.strip()) for p in txt_errores.split(",") if p.strip().isdigit()]
+            indices_error = [r - 2 for r in renglones]
+
     st.markdown("---")
     
-    # ---------------------------------------------------------
-    # HERRAMIENTA 1: EXTRACTOR DE ERRORES
-    # ---------------------------------------------------------
-    if herramienta == "✂️ 1. Extraer líneas con error (Generar fragmento Delta)":
-        st.subheader("✂️ Extraer Fragmento Delta")
-        col_e1, col_e2 = st.columns(2)
-        
-        with col_e1:
-            metodo_input = st.radio("Ingreso de líneas:", ["Reporte de Banner (.xlsx)", "Manual (comas)"])
-            file_errores = st.file_uploader("📥 Reporte de Banner", type=["xlsx"]) if metodo_input == "Reporte de Banner (.xlsx)" else None
-            txt_errores = st.text_input("✍️ Líneas (Ej. 4, 18):") if metodo_input == "Manual (comas)" else ""
+    # --- PASO 2: EXTRAER O EDITAR EL FRAGMENTO (DELTA) ---
+    st.subheader("2️⃣ Obtener Filas para Corregir")
+    st.markdown("Decide cómo quieres tratar las filas que fallaron.")
+    
+    if dict_csvs_a_procesar and indices_error:
+        for nombre_archivo, df_base in dict_csvs_a_procesar.items():
+            indices_validos = [i for i in indices_error if 0 <= i < len(df_base)]
             
-        with col_e2:
-            file_csv_base = st.file_uploader("📂 Sube el CSV Original (Base)", type=["csv"], key="ext_base")
+            if not indices_validos:
+                st.warning(f"Las líneas indicadas no existen en el archivo {nombre_archivo}.")
+                continue
+                
+            df_delta = df_base.iloc[indices_validos].copy()
             
-        if file_csv_base and (file_errores or txt_errores.strip()):
-            if st.button("🔍 Extraer Segmento"):
-                df_base = pd.read_csv(file_csv_base, encoding="utf-8")
-                
-                if metodo_input == "Reporte de Banner (.xlsx)":
-                    df_err_excel = pd.read_excel(file_errores, skiprows=2)
-                    renglones_errores = df_err_excel["Línea"].dropna().astype(int).unique().tolist()
-                else:
-                    renglones_errores = [int(p.strip()) for p in txt_errores.split(",") if p.strip().isdigit()]
-                
-                indices = [r - 2 for r in renglones_errores if 0 <= (r - 2) < len(df_base)]
-                df_delta = df_base.iloc[indices].copy()
-                
-                if not df_delta.empty:
-                    csv_bytes = df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                    out_name = f"Fragmento_Errores_{file_csv_base.name}"
-                    st.download_button("📥 Descargar Fragmento para corregir", data=csv_bytes, file_name=out_name, type="primary")
-                else:
-                    st.warning("No se encontraron coincidencias con esas líneas.")
+            modo_delta = st.radio(
+                f"⚙️ ¿Qué deseas hacer con las {len(indices_validos)} filas de {nombre_archivo}?", 
+                ["Descargar fragmento manual (Corregir en Excel)", "Cambiar en vivo en la consola"],
+                key=f"radio_{nombre_archivo}",
+                horizontal=True
+            )
+            
+            if modo_delta == "Descargar fragmento manual (Corregir en Excel)":
+                csv_delta = df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8")
+                st.download_button(
+                    label="📥 Descargar pedacito con error (.csv)", 
+                    data=csv_delta, 
+                    file_name=f"Errores_{nombre_archivo}", 
+                    type="secondary"
+                )
+            else:
+                st.caption("Edita los datos directamente en la tabla y descarga el pedacito corregido.")
+                df_editado = st.data_editor(df_delta, key=f"ed_{nombre_archivo}", use_container_width=True)
+                csv_delta_ed = df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8")
+                st.download_button(
+                    label="📥 Descargar pedacito ya corregido (.csv)", 
+                    data=csv_delta_ed, 
+                    file_name=f"Corregidas_{nombre_archivo}", 
+                    type="primary"
+                )
 
-    # ---------------------------------------------------------
-    # HERRAMIENTA 2: INYECTOR ABIERTO
-    # ---------------------------------------------------------
-    elif herramienta == "💉 2. Inyectar fragmento corregido (Generar CSV Final)":
-        st.subheader("💉 Inyectar Correcciones al Original")
-        st.info("Sube tu archivo original y el fragmento que ya corregiste en Excel. Se sobreescribirán los renglones exactos.")
-        
-        col_i1, col_i2, col_i3 = st.columns(3)
-        with col_i1:
-            file_base_iny = st.file_uploader("📂 1. CSV Original (Base)", type=["csv"], key="iny_base")
-        with col_i2:
-            file_frag_iny = st.file_uploader("📝 2. Fragmento Corregido", type=["csv"], key="iny_frag")
-        with col_i3:
-            lineas_iny = st.text_input("✍️ 3. Líneas a sobreescribir (Ej. 4, 18):", help="Deben ser las mismas líneas que extrajiste originalmente.")
-            num_v = st.number_input("Versión de salida (Ej. V1):", min_value=1, value=1)
+    st.markdown("---")
+    
+    # --- PASO 3: INYECTAR Y GENERAR BASE FINAL ---
+    st.subheader("3️⃣ Inyectar Correcciones al Archivo Original")
+    st.markdown("Sube el pedacito que corregiste (V1, V2...) en el Paso 2 para que el sistema lo inyecte en el archivo base y genere el CSV final completo para la Pestaña 3.")
+    
+    col_f1, col_f2 = st.columns([2, 1])
+    with col_f1:
+        file_delta_corregido = st.file_uploader("📝 Sube el fragmento corregido (.csv)", type=["csv"], key="up_v")
+    with col_f2:
+        num_v = st.number_input("🔢 Versión de salida (Ej. 1 para V1):", min_value=1, value=1)
+    
+    if file_delta_corregido and dict_csvs_a_procesar and indices_error:
+        if st.button("🚀 Inyectar y Generar CSV Base Completo", type="primary"):
+            df_corregido = pd.read_csv(file_delta_corregido, encoding="utf-8")
             
-        if file_base_iny and file_frag_iny and lineas_iny.strip():
-            if st.button("🚀 Inyectar y Generar Archivo Final", type="primary"):
-                df_base = pd.read_csv(file_base_iny, encoding="utf-8")
-                df_frag = pd.read_csv(file_frag_iny, encoding="utf-8")
+            for nombre_archivo, df_base in dict_csvs_a_procesar.items():
+                indices_validos = [i for i in indices_error if 0 <= i < len(df_base)]
                 
-                renglones = [int(p.strip()) for p in lineas_iny.split(",") if p.strip().isdigit()]
-                indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
-                
-                if len(indices) == len(df_frag):
+                # Validación de seguridad: el pedacito debe tener el mismo número de filas que los errores originales
+                if len(indices_validos) == len(df_corregido):
                     df_final = df_base.copy()
-                    df_final.iloc[indices] = df_frag[df_final.columns].values
                     
-                    csv_bytes = df_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                    out_name = f"{file_base_iny.name.rsplit('.', 1)[0]}_V{num_v}.csv"
-                    st.success("¡Inyección exitosa!")
-                    st.download_button(f"📥 DESCARGAR {out_name}", data=csv_bytes, file_name=out_name, type="primary")
+                    # Inyección ciega por número de renglón (mantiene el orden intacto)
+                    df_final.iloc[indices_validos] = df_corregido[df_final.columns].values
+                    
+                    out_name = f"{nombre_archivo.rsplit('.', 1)[0]}_V{num_v}.csv"
+                    csv_final = df_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
+                    
+                    st.success("🎉 ¡CSV Final generado con éxito! Las correcciones se inyectaron perfectamente.")
+                    st.download_button(
+                        label=f"📁 📥 DESCARGAR {out_name}", 
+                        data=csv_final, 
+                        file_name=out_name, 
+                        type="primary",
+                        use_container_width=True
+                    )
                 else:
-                    st.error(f"❌ Desajuste: Me indicaste {len(indices)} líneas, pero el fragmento tiene {len(df_frag)} filas.")
-
-    # ---------------------------------------------------------
-    # HERRAMIENTA 3: EDITOR LIBRE EN VIVO
-    # ---------------------------------------------------------
-    elif herramienta == "📝 3. Editor Libre (Modificar un CSV completo en vivo)":
-        st.subheader("📝 Editor CSV Libre")
-        st.info("Sube cualquier archivo CSV (Base o V1) y modifícalo directamente como si fuera Excel.")
-        
-        file_ed_libre = st.file_uploader("📂 Sube tu archivo CSV", type=["csv"], key="ed_libre")
-        if file_ed_libre:
-            df_libre = pd.read_csv(file_ed_libre, encoding="utf-8")
-            num_v_libre = st.number_input("Versión de salida:", min_value=1, value=1)
-            
-            df_editado = st.data_editor(df_libre, use_container_width=True, key="tabla_libre")
-            
-            if st.button("💾 Guardar Cambios y Descargar", type="primary"):
-                csv_bytes = df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                out_name = f"{file_ed_libre.name.rsplit('.', 1)[0]}_V{num_v_libre}.csv"
-                st.download_button(f"📥 DESCARGAR {out_name}", data=csv_bytes, file_name=out_name, type="primary")
+                    st.error(f"❌ Desajuste: Seleccionaste {len(indices_validos)} filas de error, pero el archivo corregido que subiste tiene {len(df_corregido)}. Asegúrate de no borrar ni agregar renglones.")
 
 # ============================================================
-# PESTAÑA 3 (AHORA PASO 2): INYECTAR REPORTE ARGOS Y CLÚSTER
+# PESTAÑA 3: INYECCIÓN DE NRCS Y GENERACIÓN DE CLÚSTER
 # ============================================================
 with tab3:
     st.header("Inyección de NRCs y Generación Estricta de Clúster")
+    st.markdown("Cruce directo: Inyecta las correcciones del CSV, mapea los NRCs de ARGOS y genera el archivo Clúster.")
     
-    # --- FUNCIONES LOCALES DE RESPALDO PARA EVITAR DEFINED ERRORS ---
-    def _local_limpiar_texto(val):
-        if pd.isna(val) or val is None:
-            return ""
-        s = str(val).strip()
-        if s.lower() == "nan" or s == "":
-            return ""
-        if s.endswith(".0"):
-            s = s[:-2]
-        return s
-
-    def _local_normalizar_mayusculas(val):
-        return _local_limpiar_texto(val).upper()
-
-    def _local_seccion_a_dos_digitos(val):
-        s = _local_limpiar_texto(val)
-        if not s:
-            return ""
-        if s.isdigit():
-            return f"{int(s):02d}"
-        return s
-    # -----------------------------------------------------------------
-
     col_a, col_b, col_c = st.columns(3)
     with col_a: file_argos = st.file_uploader("📊 1. Reporte ARGOS (.csv)", type=["csv"])
-    with col_b: files_csv_finales = st.file_uploader("📝 2. Archivos CSV finales (Originales + V1, V2...)", type=["csv"], accept_multiple_files=True)
-    with col_c: files_xlsx_originales = st.file_uploader("📁 3. Archivos EXCEL originales (.xlsx)", type=["xlsx"], accept_multiple_files=True)
+    with col_b: files_csv_finales = st.file_uploader("📝 2. CSVs Finales Corregidos", type=["csv"], accept_multiple_files=True)
+    with col_c: files_xlsx_originales = st.file_uploader("📁 3. Excels Originales (ALTAS)", type=["xlsx"], accept_multiple_files=True)
         
     if file_argos and files_csv_finales and files_xlsx_originales:
-        if st.button("🚀 Procesar Cruce e Inyectar Pestaña NRC + Clúster", type="primary"):
+        if st.button("🚀 Procesar Cruce Directo y Generar Clúster", type="primary"):
             try:
-                # 1. LEER ARGOS Y LIMPIAR COLUMNAS
+                # 1. LEER ARGOS Y CREAR DICCIONARIO DE NRCS
                 argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip')
+                argos_df.columns = [re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) for c in argos_df.columns]
                 
-                # Normalización de encabezados
-                argos_df.columns = [
-                    re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) 
-                    for c in argos_df.columns
-                ]
-                
-                col_curso = "No.Curso" if "No.Curso" in argos_df.columns else ("No..Curso" if "No..Curso" in argos_df.columns else None)
-                if col_curso is None:
-                    columnas_candidatas = [c for c in argos_df.columns if "Curso" in c]
-                    if columnas_candidatas:
-                        col_curso = columnas_candidatas[0]
-                    else:
-                        raise KeyError("No se encontró la columna del número de curso en el reporte de ARGOS.")
+                col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
+                if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
 
-                argos_df["Periodo"] = argos_df["Periodo"].apply(_local_limpiar_texto)
-                argos_df["Nivel"] = argos_df["Nivel"].apply(_local_normalizar_mayusculas)
-                argos_df["Área"] = argos_df["Área"].apply(_local_normalizar_mayusculas)
-                argos_df[col_curso] = argos_df[col_curso].apply(_local_limpiar_texto)
-                argos_df["Grupo"] = argos_df["Grupo"].apply(_local_seccion_a_dos_digitos)
+                argos_df["Periodo"] = argos_df["Periodo"].apply(limpiar_texto_r)
+                argos_df["Nivel"] = argos_df["Nivel"].apply(normalizar_mayusculas_r)
+                argos_df["Área"] = argos_df["Área"].apply(normalizar_mayusculas_r)
+                argos_df[col_curso] = argos_df[col_curso].apply(limpiar_texto_r)
+                argos_df["Grupo"] = argos_df["Grupo"].apply(seccion_a_dos_digitos)
                 
-                argos_df["_llave_maestra"] = (argos_df["Periodo"] + "_" + 
-                                              argos_df["Nivel"] + "_" + 
-                                              argos_df["Área"] + "_" + 
-                                              argos_df[col_curso] + "_" + 
-                                              argos_df["Grupo"])
+                argos_df["_llave_argos"] = (argos_df["Periodo"] + "_" + argos_df["Nivel"] + "_" + 
+                                            argos_df["Área"] + "_" + argos_df[col_curso] + "_" + argos_df["Grupo"])
                 
-                argos_df = argos_df.drop_duplicates(subset=["_llave_maestra"])
-                mapa_nrcs = dict(zip(argos_df["_llave_maestra"], argos_df["NRC"]))
+                argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
+                mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
 
-                # 2. CONSOLIDAR VERSIONES DE CSV (Última versión gana por PERIODO, SEDE, SECCION)
-                dict_csvs_agrupados = {}
+                # 2. AGRUPAR LOS CSV FINALIZADOS
+                dict_csvs_finalizados = {}
                 for fc in files_csv_finales:
                     base_name, version = obtener_base_y_version(fc.name)
-                    dict_csvs_agrupados.setdefault(base_name, {})[version] = fc
-                
-                dict_csvs_finalizados = {}  
+                    # Si suben varios del mismo, nos quedamos con la versión más alta
+                    if base_name not in dict_csvs_finalizados or version > dict_csvs_finalizados[base_name]['v']:
+                        df_csv = pd.read_csv(io.BytesIO(fc.getvalue()), encoding="utf-8")
+                        dict_csvs_finalizados[base_name] = {'v': version, 'df': df_csv}
 
-                for base_name, versiones in dict_csvs_agrupados.items():
-                    lista_dfs = []
-                    for v in sorted(versiones.keys()):
-                        df_v = pd.read_csv(io.BytesIO(versiones[v].getvalue()), encoding="utf-8")
-                        df_v.reset_index(drop=True, inplace=True)
-                        lista_dfs.append(df_v)
-                    
-                    if not lista_dfs:
-                        continue
-                    
-                    df_consolidado = pd.concat(lista_dfs, ignore_index=True)
-                    df_consolidado.reset_index(drop=True, inplace=True)
-                    
-                    if "PERIODO" in df_consolidado.columns and "SEDE" in df_consolidado.columns and "SECCION" in df_consolidado.columns:
-                        df_consolidado["_temp_per"] = df_consolidado["PERIODO"].apply(_local_limpiar_texto)
-                        df_consolidado["_temp_sed"] = df_consolidado["SEDE"].apply(_local_limpiar_texto)
-                        df_consolidado["_temp_sec"] = df_consolidado["SECCION"].apply(_local_seccion_a_dos_digitos)
-                        
-                        df_consolidado = df_consolidado.drop_duplicates(subset=["_temp_per", "_temp_sed", "_temp_sec"], keep='last')
-                        df_consolidado.drop(columns=["_temp_per", "_temp_sed", "_temp_sec"], inplace=True)
-                    
-                    dict_csvs_finalizados[base_name] = df_consolidado.reset_index(drop=True)
-
-                # 3. PROCESAR CADA EXCEL E INYECTAR NRC
+                # 3. COPY-PASTE DIRECTO EN LOS EXCELS Y GENERAR CLÚSTER
                 excels_inyectados_zip = io.BytesIO()
                 filas_para_cluster_maestro = []
                 
@@ -573,7 +530,7 @@ with tab3:
                         base_x, _ = obtener_base_y_version(fx.name)
                         
                         if base_x in dict_csvs_finalizados:
-                            df_csv_perfecto = dict_csvs_finalizados[base_x]
+                            df_csv_perfecto = dict_csvs_finalizados[base_x]['df']
                             wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
                             
                             if HOJA_ALTAS in wb.sheetnames:
@@ -582,39 +539,36 @@ with tab3:
                                 header_excel = [str(c).strip() if c is not None else "" for c in data[0]]
                                 df_excel_original = pd.DataFrame(data[1:], columns=header_excel)
                                 
+                                # VALIDACIÓN CRÍTICA: Deben tener la misma cantidad de filas
+                                if len(df_excel_original) != len(df_csv_perfecto):
+                                    st.error(f"❌ Error en {fx.name}: El Excel tiene {len(df_excel_original)} filas y el CSV tiene {len(df_csv_perfecto)}. ¡No coinciden!")
+                                    continue
+                                
                                 df_nrc_pestana = df_excel_original.copy()
                                 
-                                df_excel_original["_k_per"] = df_excel_original["Periodo"].apply(_local_limpiar_texto)
-                                df_excel_original["_k_sed"] = df_excel_original["Campus"].apply(_local_limpiar_texto)
-                                df_excel_original["_k_sec"] = df_excel_original["Sección"].apply(_local_seccion_a_dos_digitos)
+                                # --- MAGIA DE COPY-PASTE DIRECTO (LAS EQUIVALENCIAS) ---
+                                # Como están en el mismo orden, solo trasladamos los valores del CSV al Excel
+                                df_nrc_pestana["Subject"] = df_csv_perfecto["SUBJ"].values
+                                df_nrc_pestana["Course"] = df_csv_perfecto["COURSE"].values
                                 
-                                df_csv_perfecto["_k_per"] = df_csv_perfecto["PERIODO"].apply(_local_limpiar_texto)
-                                df_csv_perfecto["_k_sed"] = df_csv_perfecto["SEDE"].apply(_local_limpiar_texto)
-                                df_csv_perfecto["_k_sec"] = df_csv_perfecto["SECCION"].apply(_local_seccion_a_dos_digitos)
-                                
-                                df_csv_mapping = df_csv_perfecto[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates(subset=["_k_per", "_k_sed", "_k_sec"])
-                                
-                                df_excel_original = df_excel_original.merge(df_csv_mapping, on=["_k_per", "_k_sed", "_k_sec"], how="left")
-                                
-                                df_nrc_pestana["Subject"] = df_excel_original["SUBJ"].combine_first(df_nrc_pestana["Subject"])
-                                df_nrc_pestana["Course"] = df_excel_original["COURSE"].combine_first(df_nrc_pestana["Course"])
-                                
-                                periodo_clean = df_nrc_pestana["Periodo"].apply(_local_limpiar_texto)
-                                nivel_clean = df_nrc_pestana["Nivel"].apply(_local_normalizar_mayusculas)
-                                subject_clean = df_nrc_pestana["Subject"].apply(_local_normalizar_mayusculas)
-                                course_clean = df_nrc_pestana["Course"].apply(_local_limpiar_texto)
-                                seccion_clean = df_nrc_pestana["Sección"].apply(_local_seccion_a_dos_digitos)
+                                # Ahora creamos la llave de ARGOS con los datos ya corregidos
+                                periodo_clean = df_nrc_pestana["Periodo"].apply(limpiar_texto_r)
+                                nivel_clean = df_nrc_pestana["Nivel"].apply(normalizar_mayusculas_r)
+                                subject_clean = df_nrc_pestana["Subject"].apply(normalizar_mayusculas_r)
+                                course_clean = df_nrc_pestana["Course"].apply(limpiar_texto_r)
+                                seccion_clean = df_nrc_pestana["Sección"].apply(seccion_a_dos_digitos)
                                 
                                 llaves_filas_excel = (periodo_clean + "_" + nivel_clean + "_" + 
                                                       subject_clean + "_" + course_clean + "_" + seccion_clean)
                                 
+                                # Extraer NRCs y colocarlos en la primera columna
                                 vec_nrc = llaves_filas_excel.map(mapa_nrcs)
                                 df_nrc_pestana.insert(0, "NRC", vec_nrc)
                                 
+                                # Guardar la pestaña clonada en el Excel
                                 if HOJA_SALIDA_NRC in wb.sheetnames:
                                     del wb[HOJA_SALIDA_NRC]
                                 ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
-                                
                                 ws_nrc.append(list(df_nrc_pestana.columns))
                                 for fila in df_nrc_pestana.values:
                                     ws_nrc.append([None if pd.isna(v) else v for v in fila])
@@ -623,7 +577,7 @@ with tab3:
                                 wb.save(excel_buffer)
                                 zip_out.writestr(fx.name, excel_buffer.getvalue())
                                 
-                                # RECOLECCIÓN PARA EL CSV DE CLÚSTER
+                                # --- RECOLECTAR DATOS PARA EL CLÚSTER ---
                                 for idx_row, row_ex in df_excel_original.iterrows():
                                     filas_para_cluster_maestro.append({
                                         "Periodo": row_ex.get("Periodo"),
@@ -633,24 +587,23 @@ with tab3:
                         else:
                             st.warning(f"⚠️ El archivo Excel `{fx.name}` no encontró su CSV correspondiente.")
 
-                    # 4. ESCRITURA DEL CSV DE CLÚSTER UNIFICADO Y ESTRICTO
+                    # 4. CREAR EL CSV MAESTRO DE CLÚSTER
                     if filas_para_cluster_maestro:
                         df_cluster_parcial = pd.DataFrame(filas_para_cluster_maestro)
                         df_cluster_final = pd.DataFrame(columns=COLUMNAS_CLUSTER_FINAL)
                         
-                        # Inyectar solo las 3 variables de interés
-                        df_cluster_final["Periodo"] = df_cluster_parcial["Periodo"].apply(_local_limpiar_texto)
+                        df_cluster_final["Periodo"] = df_cluster_parcial["Periodo"].apply(limpiar_texto_r)
                         df_cluster_final["CRN"] = df_cluster_parcial["CRN"] 
-                        df_cluster_final["datocomplementario"] = df_cluster_parcial["datocomplementario"].apply(_local_limpiar_texto)
+                        df_cluster_final["datocomplementario"] = df_cluster_parcial["datocomplementario"].apply(limpiar_texto_r)
                         
-                        # Rellenar las 21 columnas sobrantes con strings vacíos
+                        # Rellenar todo lo demás en blanco
                         df_cluster_final = df_cluster_final.fillna("")
 
                         csv_cluster_bytes = df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
                         zip_out.writestr("cluster_unificado.csv", csv_cluster_bytes)
 
                 st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
-                st.success("🎉 ¡Proceso finalizado! Excels actualizados y CSV de Clúster generado con estructura exacta.")
+                st.success("🎉 ¡Proceso finalizado! Se realizó el cruce directo, los Excels tienen su pestaña NRC y el archivo Clúster está listo.")
                 st.rerun()
 
             except Exception as e:
