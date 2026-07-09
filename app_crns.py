@@ -358,127 +358,111 @@ with tab1:
             )
 
 # ============================================================
-# PESTAÑA 2: REPORTE DE ERRORES Y CORRECCIÓN QUIRÚRGICA
+# PESTAÑA 2: CAJA DE HERRAMIENTAS DE CORRECCIÓN (ABIERTA)
 # ============================================================
 with tab_err:
-    st.header("⚠️ Corrección Quirúrgica de Errores (Banner)")
-    st.markdown("Extrae los errores exactos de Banner y decide cómo solucionarlos sin afectar el orden ni duplicar materias.")
+    st.header("⚠️ Caja de Herramientas de Corrección (Banner)")
+    st.markdown("Procesos independientes para extraer errores o inyectar correcciones en tus archivos.")
     
-    col_err1, col_err2 = st.columns(2)
-    with col_err1:
-        metodo_input = st.radio("🛠️ Ingreso de líneas fallidas:", ["Subir archivo Excel de Banner", "Escribir números de línea manualmente"])
-        
-        file_errores = None
-        txt_errores = ""
-        input_valido = False
-        
-        if metodo_input == "Subir archivo Excel de Banner":
-            file_errores = st.file_uploader("📥 Reporte de Errores (.xlsx)", type=["xlsx"])
-            if file_errores: input_valido = True
-        else:
-            txt_errores = st.text_input("✍️ Números de línea separados por comas (Ej. 4, 18):")
-            if txt_errores.strip(): input_valido = True
-
-    with col_err2:
-        origen_csv = st.radio("📂 ¿Qué CSV vas a corregir?", ["Utilizar un CSV de la Pestaña 1", "Subir un CSV completo desde mi equipo"])
-        dict_csvs_a_procesar = {}
-        if origen_csv == "Utilizar un CSV de la Pestaña 1":
-            if st.session_state.csv_files_to_download:
-                sel = st.selectbox("Elige el CSV a depurar:", list(st.session_state.csv_files_to_download.keys()))
-                if sel: 
-                    dict_csvs_a_procesar[sel] = pd.read_csv(io.BytesIO(st.session_state.csv_files_to_download[sel]), encoding="utf-8")
-            else:
-                st.warning("⚠️ No hay CSVs generados en memoria.")
-        else:
-            file_csv_manual = st.file_uploader("Sube el CSV base original", type=["csv"])
-            if file_csv_manual: 
-                dict_csvs_a_procesar[file_csv_manual.name] = pd.read_csv(file_csv_manual, encoding="utf-8")
-        
-        num_version = st.number_input("🔢 Número de versión final (Ej. V1):", min_value=1, value=1)
-
+    herramienta = st.radio(
+        "🛠️ ¿Qué proceso deseas realizar?", 
+        [
+            "✂️ 1. Extraer líneas con error (Generar fragmento Delta)", 
+            "💉 2. Inyectar fragmento corregido (Generar CSV Final)",
+            "📝 3. Editor Libre (Modificar un CSV completo en vivo)"
+        ],
+        horizontal=False
+    )
     st.markdown("---")
     
-    # 🌟 AQUÍ ESTÁ LA MAGIA: LAS DOS OPCIONES DE CORRECCIÓN
-    modo_correccion = st.radio(
-        "⚡ ¿Cómo deseas corregir los errores?", 
-        ["Panel Interactivo (Editar directamente en la consola)", "Descargar fragmento, corregir en Excel y volver a subir"],
-        horizontal=True
-    )
+    # ---------------------------------------------------------
+    # HERRAMIENTA 1: EXTRACTOR DE ERRORES
+    # ---------------------------------------------------------
+    if herramienta == "✂️ 1. Extraer líneas con error (Generar fragmento Delta)":
+        st.subheader("✂️ Extraer Fragmento Delta")
+        col_e1, col_e2 = st.columns(2)
+        
+        with col_e1:
+            metodo_input = st.radio("Ingreso de líneas:", ["Reporte de Banner (.xlsx)", "Manual (comas)"])
+            file_errores = st.file_uploader("📥 Reporte de Banner", type=["xlsx"]) if metodo_input == "Reporte de Banner (.xlsx)" else None
+            txt_errores = st.text_input("✍️ Líneas (Ej. 4, 18):") if metodo_input == "Manual (comas)" else ""
+            
+        with col_e2:
+            file_csv_base = st.file_uploader("📂 Sube el CSV Original (Base)", type=["csv"], key="ext_base")
+            
+        if file_csv_base and (file_errores or txt_errores.strip()):
+            if st.button("🔍 Extraer Segmento"):
+                df_base = pd.read_csv(file_csv_base, encoding="utf-8")
+                
+                if metodo_input == "Reporte de Banner (.xlsx)":
+                    df_err_excel = pd.read_excel(file_errores, skiprows=2)
+                    renglones_errores = df_err_excel["Línea"].dropna().astype(int).unique().tolist()
+                else:
+                    renglones_errores = [int(p.strip()) for p in txt_errores.split(",") if p.strip().isdigit()]
+                
+                indices = [r - 2 for r in renglones_errores if 0 <= (r - 2) < len(df_base)]
+                df_delta = df_base.iloc[indices].copy()
+                
+                if not df_delta.empty:
+                    csv_bytes = df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8")
+                    out_name = f"Fragmento_Errores_{file_csv_base.name}"
+                    st.download_button("📥 Descargar Fragmento para corregir", data=csv_bytes, file_name=out_name, type="primary")
+                else:
+                    st.warning("No se encontraron coincidencias con esas líneas.")
 
-    if input_valido and dict_csvs_a_procesar:
-        renglones_errores = []
-        if metodo_input == "Subir archivo Excel de Banner":
-            df_err_excel = pd.read_excel(file_errores, skiprows=2)
-            renglones_errores = df_err_excel["Línea"].dropna().astype(int).unique().tolist()
-        else:
-            renglones_errores = [int(p.strip()) for p in txt_errores.split(",") if p.strip().isdigit()]
+    # ---------------------------------------------------------
+    # HERRAMIENTA 2: INYECTOR ABIERTO
+    # ---------------------------------------------------------
+    elif herramienta == "💉 2. Inyectar fragmento corregido (Generar CSV Final)":
+        st.subheader("💉 Inyectar Correcciones al Original")
+        st.info("Sube tu archivo original y el fragmento que ya corregiste en Excel. Se sobreescribirán los renglones exactos.")
+        
+        col_i1, col_i2, col_i3 = st.columns(3)
+        with col_i1:
+            file_base_iny = st.file_uploader("📂 1. CSV Original (Base)", type=["csv"], key="iny_base")
+        with col_i2:
+            file_frag_iny = st.file_uploader("📝 2. Fragmento Corregido", type=["csv"], key="iny_frag")
+        with col_i3:
+            lineas_iny = st.text_input("✍️ 3. Líneas a sobreescribir (Ej. 4, 18):", help="Deben ser las mismas líneas que extrajiste originalmente.")
+            num_v = st.number_input("Versión de salida (Ej. V1):", min_value=1, value=1)
             
-        for nombre_archivo, df_datos in dict_csvs_a_procesar.items():
-            # Banner cuenta desde 2 (header + base 1), ajustamos a índice de Pandas (base 0)
-            indices = [r - 2 for r in renglones_errores if 0 <= (r - 2) < len(df_datos)]
-            df_delta = df_datos.iloc[indices].copy()
-            
-            if df_delta.empty:
-                st.info(f"No hay filas que coincidan en {nombre_archivo}.")
-                continue
+        if file_base_iny and file_frag_iny and lineas_iny.strip():
+            if st.button("🚀 Inyectar y Generar Archivo Final", type="primary"):
+                df_base = pd.read_csv(file_base_iny, encoding="utf-8")
+                df_frag = pd.read_csv(file_frag_iny, encoding="utf-8")
                 
-            st.markdown(f"### 📄 Procesando: `{nombre_archivo}`")
-            out_name = f"{nombre_archivo.rsplit('.', 1)[0]}_V{num_version}.csv"
-            
-            # ---------------------------------------------------------
-            # OPCIÓN 1: PANEL INTERACTIVO EN VIVO
-            # ---------------------------------------------------------
-            if modo_correccion == "Panel Interactivo (Editar directamente en la consola)":
-                st.caption(f"Editando {len(indices)} fila(s) con error. Los cambios se inyectarán en su renglón exacto.")
-                df_editado = st.data_editor(df_delta, key=f"edit_{nombre_archivo}", use_container_width=True)
+                renglones = [int(p.strip()) for p in lineas_iny.split(",") if p.strip().isdigit()]
+                indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
                 
-                if st.button("💾 Inyectar Cambios y Descargar CSV Completo", type="primary", key=f"btn_save_{nombre_archivo}"):
-                    df_final = df_datos.copy()
-                    # Inyección quirúrgica por posición
-                    df_final.iloc[indices] = df_editado.values 
+                if len(indices) == len(df_frag):
+                    df_final = df_base.copy()
+                    df_final.iloc[indices] = df_frag[df_final.columns].values
                     
                     csv_bytes = df_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                    st.download_button(
-                        label=f"📥 DESCARGAR {out_name}",
-                        data=csv_bytes,
-                        file_name=out_name,
-                        mime="text/csv",
-                        type="primary"
-                    )
-                    st.success("¡CSV Corregido generado con éxito! Llévalo directo a la Pestaña 3.")
+                    out_name = f"{file_base_iny.name.rsplit('.', 1)[0]}_V{num_v}.csv"
+                    st.success("¡Inyección exitosa!")
+                    st.download_button(f"📥 DESCARGAR {out_name}", data=csv_bytes, file_name=out_name, type="primary")
+                else:
+                    st.error(f"❌ Desajuste: Me indicaste {len(indices)} líneas, pero el fragmento tiene {len(df_frag)} filas.")
+
+    # ---------------------------------------------------------
+    # HERRAMIENTA 3: EDITOR LIBRE EN VIVO
+    # ---------------------------------------------------------
+    elif herramienta == "📝 3. Editor Libre (Modificar un CSV completo en vivo)":
+        st.subheader("📝 Editor CSV Libre")
+        st.info("Sube cualquier archivo CSV (Base o V1) y modifícalo directamente como si fuera Excel.")
+        
+        file_ed_libre = st.file_uploader("📂 Sube tu archivo CSV", type=["csv"], key="ed_libre")
+        if file_ed_libre:
+            df_libre = pd.read_csv(file_ed_libre, encoding="utf-8")
+            num_v_libre = st.number_input("Versión de salida:", min_value=1, value=1)
             
-            # ---------------------------------------------------------
-            # OPCIÓN 2: DESCARGAR Y SUBIR
-            # ---------------------------------------------------------
-            else:
-                csv_delta_bytes = df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                st.download_button(
-                    label="1️⃣ Descargar Fragmento con Error (.csv)", 
-                    data=csv_delta_bytes, 
-                    file_name=f"Fragmento_Error_{nombre_archivo}"
-                )
-                
-                file_fragmento = st.file_uploader("2️⃣ Sube el fragmento una vez que lo hayas corregido en Excel", type=["csv"], key=f"up_{nombre_archivo}")
-                if file_fragmento:
-                    df_subido = pd.read_csv(file_fragmento, encoding="utf-8")
-                    
-                    if len(df_subido) == len(indices):
-                        if st.button("💉 Inyectar Fragmento y Descargar CSV Completo", type="primary"):
-                            df_final = df_datos.copy()
-                            # Aseguramos el orden de las columnas y hacemos la inyección quirúrgica
-                            df_final.iloc[indices] = df_subido[df_final.columns].values
-                            
-                            csv_bytes = df_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                            st.download_button(
-                                label=f"📥 DESCARGAR {out_name}",
-                                data=csv_bytes,
-                                file_name=out_name,
-                                mime="text/csv",
-                                type="primary"
-                            )
-                            st.success("¡CSV Corregido generado con éxito! Llévalo directo a la Pestaña 3.")
-                    else:
-                        st.error(f"❌ El fragmento subido tiene {len(df_subido)} filas, pero se esperaban {len(indices)}. Asegúrate de no borrar ni agregar renglones.")
+            df_editado = st.data_editor(df_libre, use_container_width=True, key="tabla_libre")
+            
+            if st.button("💾 Guardar Cambios y Descargar", type="primary"):
+                csv_bytes = df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8")
+                out_name = f"{file_ed_libre.name.rsplit('.', 1)[0]}_V{num_v_libre}.csv"
+                st.download_button(f"📥 DESCARGAR {out_name}", data=csv_bytes, file_name=out_name, type="primary")
 
 # ============================================================
 # PESTAÑA 3 (AHORA PASO 2): INYECTAR REPORTE ARGOS Y CLÚSTER
