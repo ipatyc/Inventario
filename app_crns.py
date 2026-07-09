@@ -50,14 +50,19 @@ def limpia_seccion_interna(x):
     return s
 
 def obtener_base_nombre(filename):
-    """Extrae el nombre base de un archivo removiendo extensiones y sufijos de corrección"""
+    """Extrae el nombre base de un archivo removiendo extensiones y sufijos cortos de versión (V1, V2, etc.)"""
     if not filename: return ""
     s = filename.upper().strip()
     for ext in [".CSV", ".XLSX", ".XLS"]:
         if s.endswith(ext): s = s[:-len(ext)]
-    # Remover sufijos comunes de edición manual para poder emparejar el CSV corregido con el XLSX original
-    for sufijo in ["_CORRECCION_V1", "_CORRECCION_V2", "_CORRECCION_V3", "_V1", "_V2", "_V3", "_CORREGIDO"]:
-        if s.endswith(sufijo): s = s[:-len(sufijo)]
+    
+    # Intentar remover de forma dinámica patrones como _V1, _V2, _V3... hasta _V20 si fuera necesario
+    for v_num in range(1, 21):
+        sufijo = f"_V{v_num}"
+        if s.endswith(sufijo):
+            s = s[:-len(sufijo)]
+            break
+            
     return s.strip()
 
 # Inicialización de estados en memoria de Streamlit
@@ -352,7 +357,7 @@ with tab_err:
                 df_delta = df_datos.iloc[indices].copy()
                 if not df_delta.empty:
                     csv_bytes = df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                    out_name = f"{nombre_archivo.rsplit('.', 1)[0]}_Correccion_V{num_version}.csv"
+                    out_name = f"{nombre_archivo.rsplit('.', 1)[0]}_V{num_version}.csv"
                     st.download_button(label=f"📥 Descargar fragmento: {out_name}", data=csv_bytes, file_name=out_name, mime="text/csv", use_container_width=True)
 
 # ============================================================
@@ -360,13 +365,13 @@ with tab_err:
 # ============================================================
 with tab3:
     st.header("Inyección Masiva de NRCs e Inyección de Hojas 'CRNs'")
-    st.markdown("Sube tu reporte de ARGOS, **todos tus archivos CSV finales** (tanto los que salieron limpios directos de la pestaña 1 como tus archivos corregidos a mano `V1, V2`), y tus **Excels originales**.")
+    st.markdown("Sube tu reporte de ARGOS, **todos tus archivos CSV finales** (tanto los que salieron limpios directos de la pestaña 1 como tus archivos corregidos a mano como `_V1, _V2`), y tus **Excels originales**.")
     
     col_a, col_b, col_c = st.columns(3)
     with col_a:
         file_argos = st.file_uploader("📊 1. Cargar Reporte ARGOS (.csv)", type=["csv"])
     with col_b:
-        files_csv_finales = st.file_uploader("📝 2. Sube TODOS los CSVs finales (Limpios + Versiones V1/V2)", type=["csv"], accept_multiple_files=True)
+        files_csv_finales = st.file_uploader("📝 2. Sube TODOS los CSVs finales (Limpios + Versiones _V1/_V2)", type=["csv"], accept_multiple_files=True)
     with col_c:
         files_xlsx_originales = st.file_uploader("📁 3. Sube los archivos EXCEL originales (.xlsx)", type=["xlsx"], accept_multiple_files=True)
         
