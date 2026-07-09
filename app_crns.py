@@ -12,7 +12,7 @@ from difflib import SequenceMatcher
 
 # ================= 1. CONFIGURACIÓN Y FUNCIONES ESTRUCTURALES =================
 HOJA_ALTAS = "ALTAS"
-HOJA_SALIDA_NRC = "nrc"
+HOJA_SALIDA_NRC = "NRC"  # Cambiado a mayúsculas estrictas como solicitaste
 UMBRAL_FUZZY = 0.82  
 
 CSV_KWARGS_R = {
@@ -29,7 +29,13 @@ def quitar_acentos(t):
     return "".join(c for c in unicodedata.normalize("NFD", str(t)) if unicodedata.category(c) != "Mn")
 
 def normalizar_para_cruce(t):
-    return quitar_acentos(str(t).upper().strip())
+    if pd.isna(t) or t is None:
+        return ""
+    # Asegurar conversión limpia a string si viene como flotante o entero antes de operar texto
+    s = str(t).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return quitar_acentos(s).upper().strip()
 
 def similitud(a, b): 
     return SequenceMatcher(None, a, b).ratio()
@@ -427,7 +433,7 @@ with tab3:
     if file_argos and files_csv_finales and files_xlsx_originales:
         if st.button("🚀 Ejecutar Cruce Inteligente e Inyección", type="primary"):
             try:
-                # 1. LEER ARGOS Y NORMALIZAR COLUMNAS
+                # 1. LEER ARGOS Y NORMALIZAR COLUMNAS DE INTEGRIDAD
                 argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip')
                 argos_df.columns = [str(c).replace('"', '').replace("'", "").strip() for c in argos_df.columns if c is not None]
                 
@@ -439,13 +445,13 @@ with tab3:
                     elif "CURSO" in col_upper:
                         mapa_columnas_argos["CURSO"] = col
                 
-                # Blindaje aplicado usando limpiar_clave_texto en lugar de lambdas inline propensas a fallos por tipo float
+                # Normalización estricta del DataFrame de ARGOS
                 argos_df["_k_per"] = argos_df[mapa_columnas_argos["PERIODO"]].apply(limpiar_clave_texto)
                 argos_df["_k_sub"] = argos_df[mapa_columnas_argos["ÁREA"]].apply(normalizar_para_cruce)
                 argos_df["_k_crs"] = argos_df[mapa_columnas_argos["CURSO"]].apply(limpiar_clave_texto)
                 argos_df["_k_sec"] = argos_df[mapa_columnas_argos["GRUPO"]].apply(limpia_seccion_interna)
                 
-                # 2. AGRUPAR Y CONSOLIDAR CSVS
+                # 2. AGRUPAR Y CONSOLIDAR CORRECCIONES EN LOS CSVS (SIN DUPLICAR FILAS)
                 dict_csvs_agrupados = {}
                 for fc in files_csv_finales:
                     base_name, version = obtener_base_y_version(fc.name)
@@ -465,6 +471,7 @@ with tab3:
                     df_base_csv["_k_sed"] = df_base_csv["SEDE"].apply(limpiar_clave_texto)
                     df_base_csv["_k_sec"] = df_base_csv["SECCION"].apply(limpia_seccion_interna)
                     
+                    # Aplicar correcciones incrementales (V1, V2...) sobre la misma base sin crear filas adicionales
                     for v in sorted(versiones.keys()):
                         if v == 0: 
                             continue
@@ -473,16 +480,17 @@ with tab3:
                         df_v["_k_sed"] = df_v["SEDE"].apply(limpiar_clave_texto)
                         df_v["_k_sec"] = df_v["SECCION"].apply(limpia_seccion_interna)
                         
-                        df_v_unique = df_v[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates()
+                        df_v_unique = df_v[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates(subset=["_k_per", "_k_sed", "_k_sec"])
                         
                         df_base_csv = df_base_csv.merge(df_v_unique, on=["_k_per", "_k_sed", "_k_sec"], how="left", suffixes=("", "_new"))
-                        df_base_csv["SUBJ"] = df_base_csv["SUBJ_new"].combine_first(df_base_csv["SUBJ"])
-                        df_base_csv["COURSE"] = df_base_csv["COURSE_new"].combine_first(df_base_csv["COURSE"])
-                        df_base_csv.drop(columns=["SUBJ_new", "COURSE_new"], inplace=True)
+                        if "SUBJ_new" in df_base_csv.columns:
+                            df_base_csv["SUBJ"] = df_base_csv["SUBJ_new"].combine_first(df_base_csv["SUBJ"])
+                            df_base_csv["COURSE"] = df_base_csv["COURSE_new"].combine_first(df_base_csv["COURSE"])
+                            df_base_csv.drop(columns=["SUBJ_new", "COURSE_new"], inplace=True)
                     
                     dict_csvs_finalizados[base_name] = df_base_csv
 
-                # 3. ACTUALIZAR EXCEL Y SACAR CLÚSTERES
+                # 3. CONSTRUCCIÓN DE ARCHIVOS INTEGRAL CON FILAS EXACTAS
                 excels_inyectados_zip = io.BytesIO()
                 listado_maestro_clusters = []
                 xlsx_procesados = 0
@@ -500,41 +508,51 @@ with tab3:
                                 data = ws_altas.values
                                 cols = next(data)
                                 cols = [str(c).strip() if c is not None else f"Unnamed_{i}" for i, c in enumerate(cols)]
-                                df_excel = pd.DataFrame(data, columns=cols)
+                                df_excel_original = pd.DataFrame(data, columns=cols)
                                 
+                                # Conservamos una copia exacta para garantizar que no se alteren ni agreguen filas
+                                df_excel = df_excel_original.copy()
                                 df_excel["_k_per"] = df_excel["Periodo"].apply(limpiar_clave_texto)
                                 df_excel["_k_sed"] = df_excel["Campus"].apply(limpiar_clave_texto)
                                 df_excel["_k_sec"] = df_excel["Sección"].apply(limpia_seccion_interna)
                                 
-                                df_csv_subset = df_csv_perfecto[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates()
+                                # Traer correcciones del CSV usando combinación estricta 1:1
+                                df_csv_subset = df_csv_perfecto[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates(subset=["_k_per", "_k_sed", "_k_sec"])
                                 df_excel = df_excel.merge(df_csv_subset, on=["_k_per", "_k_sed", "_k_sec"], how="left")
                                 
                                 df_excel["Subject"] = df_excel["SUBJ"].combine_first(df_excel["Subject"])
                                 df_excel["Course"] = df_excel["COURSE"].combine_first(df_excel["Course"])
                                 
-                                # Cruzar el Excel corregido con ARGOS para sacar el NRC
+                                # LLAVES PARA CRUCE PERFECTO CON ARGOS (CORREGIDO PARA TRAER EL NRC)
                                 df_excel["_k_sub"] = df_excel["Subject"].apply(normalizar_para_cruce)
                                 df_excel["_k_crs"] = df_excel["Course"].apply(limpiar_clave_texto)
                                 
+                                # Hacer un merge izquierdo limpio garantizando el mismo conteo de líneas original
                                 llaves_argos = ["_k_per", "_k_sub", "_k_crs", "_k_sec"]
-                                df_final_excel = df_excel.merge(argos_df[llaves_argos + [mapa_columnas_argos["NRC"]]], on=llaves_argos, how="left")
+                                argos_subset = argos_df[llaves_argos + [mapa_columnas_argos["NRC"]]].drop_duplicates(subset=llaves_argos)
                                 
-                                if mapa_columnas_argos["NRC"] != "NRC":
-                                    df_final_excel["NRC"] = df_final_excel[mapa_columnas_argos["NRC"]]
+                                df_final_excel = df_excel.merge(argos_subset, on=llaves_argos, how="left")
                                 
-                                cols_to_drop = [c for c in df_final_excel.columns if (isinstance(c, str) and c.startswith("_k_")) or c in ["SUBJ", "COURSE", mapa_columnas_argos.get("NRC")]]
+                                # Extraer y mapear el NRC cruzado correctamente
+                                df_final_excel["NRC"] = df_final_excel[mapa_columnas_argos["NRC"]]
+                                
+                                # Remover columnas auxiliares
+                                cols_to_drop = [c for c in df_final_excel.columns if (isinstance(c, str) and c.startswith("_k_")) or c in ["SUBJ", "COURSE", mapa_columnas_argos["NRC"]]]
                                 df_final_excel.drop(columns=[c for c in cols_to_drop if c in df_final_excel.columns], inplace=True)
                                 
+                                # Organizar columnas colocando la de NRC al inicio
                                 if "NRC" in df_final_excel.columns:
                                     orden_columnas = ["NRC"] + [c for c in df_final_excel.columns if c != "NRC"]
                                     df_final_excel = df_final_excel[orden_columnas]
                                 else:
                                     df_final_excel.insert(0, "NRC", np.nan)
                                 
+                                # LIMPIAR O REEMPLAZAR LA PESTAÑA CON EL NOMBRE SOLICITADO: "NRC"
                                 if HOJA_SALIDA_NRC in wb.sheetnames:
                                     del wb[HOJA_SALIDA_NRC]
                                 ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
                                 
+                                # Escribir el dataset respetando las filas originales exactas
                                 ws_nrc.append(list(df_final_excel.columns))
                                 for fila_datos in df_final_excel.values:
                                     row_clean = [None if pd.isna(v) else v for v in fila_datos]
@@ -545,6 +563,7 @@ with tab3:
                                 zip_out.writestr(fx.name, excel_buffer.getvalue())
                                 xlsx_procesados += 1
                                 
+                                # 4. ACUMULACIÓN DE REGISTROS DE CADA EXCEL PARA EL CLÚSTER UNIFICADO
                                 df_cl_temp = pd.DataFrame()
                                 df_cl_temp["Periodo"] = df_final_excel["Periodo"].apply(format_r_string) if "Periodo" in df_final_excel.columns else np.nan
                                 df_cl_temp["CRN"] = pd.to_numeric(df_final_excel["NRC"], errors='coerce').astype('Int64') if "NRC" in df_final_excel.columns else np.nan
