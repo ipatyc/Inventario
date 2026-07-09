@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -23,8 +23,13 @@ CSV_KWARGS_R = {
     'na_rep': 'NA'                   
 }
 
-# ---> INYECTA ESTA LÍNEA AQUÍ <---
-COLUMNAS_CLUSTER_FINAL = ["Periodo", "CRN", "datocomplementario"]
+# Plantilla estricta de 24 columnas para el Clúster
+COLUMNAS_CLUSTER_FINAL = [
+    "Periodo", "CRN", "Tipo.de.Reunión", "Fecha.Inicio", "Fecha.Fin", "Dom", "Lun", 
+    "Mar", "Mie", "Jue", "Vie", "Sab", "horarioIni", "horarioFin", "Inicio.de.sesión", 
+    "edificio", "salon", "Tipo.de.horario", "indCategoria", "idInstructor", 
+    "responsabilidad", "Ind.principal", "ind.sobre.paso", "datocomplementario"
+]
 
 def quitar_acentos(t):
     if pd.isna(t) or t is None: 
@@ -486,7 +491,7 @@ with tab3:
                 argos_df = argos_df.drop_duplicates(subset=["_llave_maestra"])
                 mapa_nrcs = dict(zip(argos_df["_llave_maestra"], argos_df["NRC"]))
 
-                # 2. CONSOLIDAR VERSIONES SIN USAR .update() NI COINCIDENCIA DE ÍNDICES
+                # 2. CONSOLIDAR VERSIONES DE CSV (Última versión gana por PERIODO, SEDE, SECCION)
                 dict_csvs_agrupados = {}
                 for fc in files_csv_finales:
                     base_name, version = obtener_base_y_version(fc.name)
@@ -517,7 +522,7 @@ with tab3:
                     
                     dict_csvs_finalizados[base_name] = df_consolidado.reset_index(drop=True)
 
-                # 3. PROCESAR CADA EXCEL
+                # 3. PROCESAR CADA EXCEL E INYECTAR NRC
                 excels_inyectados_zip = io.BytesIO()
                 filas_para_cluster_maestro = []
                 
@@ -586,15 +591,17 @@ with tab3:
                         else:
                             st.warning(f"⚠️ El archivo Excel `{fx.name}` no encontró su CSV correspondiente.")
 
-                    # 4. ESCRITURA DEL CSV DE CLÚSTER UNIFICADO
+                    # 4. ESCRITURA DEL CSV DE CLÚSTER UNIFICADO Y ESTRICTO
                     if filas_para_cluster_maestro:
                         df_cluster_parcial = pd.DataFrame(filas_para_cluster_maestro)
                         df_cluster_final = pd.DataFrame(columns=COLUMNAS_CLUSTER_FINAL)
                         
+                        # Inyectar solo las 3 variables de interés
                         df_cluster_final["Periodo"] = df_cluster_parcial["Periodo"].apply(_local_limpiar_texto)
                         df_cluster_final["CRN"] = df_cluster_parcial["CRN"] 
                         df_cluster_final["datocomplementario"] = df_cluster_parcial["datocomplementario"].apply(_local_limpiar_texto)
                         
+                        # Rellenar las 21 columnas sobrantes con strings vacíos
                         df_cluster_final = df_cluster_final.fillna("")
 
                         csv_cluster_bytes = df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
