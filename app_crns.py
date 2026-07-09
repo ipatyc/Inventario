@@ -56,7 +56,7 @@ def obtener_base_nombre(filename):
     for ext in [".CSV", ".XLSX", ".XLS"]:
         if s.endswith(ext): s = s[:-len(ext)]
     
-    # Intentar remover de forma dinámica patrones como _V1, _V2, _V3... hasta _V20 si fuera necesario
+    # Intentar remover de forma dinámica patrones como _V1, _V2, _V3... hasta _V20
     for v_num in range(1, 21):
         sufijo = f"_V{v_num}"
         if s.endswith(sufijo):
@@ -378,14 +378,33 @@ with tab3:
     if file_argos and files_csv_finales and files_xlsx_originales:
         if st.button("🚀 Ejecutar Cruce e Inyección de Lote", type="primary"):
             try:
-                # 1. Cargar reporte de ARGOS
+                # 1. Cargar reporte de ARGOS limpiando espacios/comillas extrañas en los nombres de las columnas
                 argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip')
-                argos_df["_k_per"] = argos_df["Periodo"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
-                argos_df["_k_sub"] = argos_df["Área"].apply(normalizar_para_cruce)
-                argos_df["_k_crs"] = argos_df["No..Curso"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
-                argos_df["_k_sec"] = argos_df["Grupo"].apply(limpia_seccion_interna)
-                if "Nivel" in argos_df.columns:
-                    argos_df["_k_niv"] = argos_df["Nivel"].apply(normalizar_para_cruce)
+                argos_df.columns = [str(c).replace('"', '').replace("'", "").strip() for c in argos_df.columns]
+                
+                # Mapeo inteligente de las columnas críticas de ARGOS por si cambian de puntos "."
+                mapa_columnas_argos = {}
+                for col in argos_df.columns:
+                    col_upper = col.upper()
+                    if col_upper in ["PERIODO", "ESTATUS", "NRC", "ÁREA", "GRUPO", "NIVEL", "CAMPUS", "CLUSTER", "CLÚSTER"]:
+                        mapa_columnas_argos[col_upper] = col
+                    elif "CURSO" in col_upper:
+                        mapa_columnas_argos["CURSO"] = col  # Detectará "No..Curso" o "No.Curso" indistintamente
+                
+                # Validar que las columnas mínimas existan tras la limpieza
+                columnas_requeridas = ["PERIODO", "ÁREA", "CURSO", "GRUPO", "NRC"]
+                faltantes = [c for c in columnas_requeridas if c not in mapa_columnas_argos]
+                if faltantes:
+                    st.error(f"❌ No se pudieron encontrar mapeadas las columnas {faltantes} en tu archivo de ARGOS. Columnas leídas: {list(argos_df.columns)}")
+                    st.stop()
+                
+                # Construcción de llaves de cruce estables en ARGOS
+                argos_df["_k_per"] = argos_df[mapa_columnas_argos["PERIODO"]].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                argos_df["_k_sub"] = argos_df[mapa_columnas_argos["ÁREA"]].apply(normalizar_para_cruce)
+                argos_df["_k_crs"] = argos_df[mapa_columnas_argos["CURSO"]].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                argos_df["_k_sec"] = argos_df[mapa_columnas_argos["GRUPO"]].apply(limpia_seccion_interna)
+                if "NIVEL" in mapa_columnas_argos:
+                    argos_df["_k_niv"] = argos_df[mapa_columnas_argos["NIVEL"]].apply(normalizar_para_cruce)
                 
                 # Diccionario para guardar las estructuras XLSX en bytes listas para descargar
                 excels_inyectados_zip = io.BytesIO()
@@ -417,7 +436,14 @@ with tab3:
                             llaves_match.append("_k_niv")
                             
                         # Hacer el cruce con el segmento de ARGOS para pescar el NRC
-                        fusion = df_csv.merge(argos_df[llaves_match + ["NRC"]], on=llaves_match, how="left")
+                        col_nrc_real = mapa_columnas_argos["NRC"]
+                        fusion = df_csv.merge(argos_df[llaves_match + [col_nrc_real]], on=llaves_match, how="left")
+                        
+                        # Renombrar la columna del NRC a un estándar limpio 'NRC' si es necesario
+                        if col_nrc_real != "NRC" and col_nrc_real in fusion.columns:
+                            fusion["NRC"] = fusion[col_nrc_real]
+                            fusion = fusion.drop(columns=[col_nrc_real])
+                            
                         fusion = fusion.drop_duplicates(subset=["NRC"], keep="first") if "NRC" in fusion.columns else fusion
                         
                         # Limpiar llaves temporales
@@ -456,7 +482,8 @@ with tab3:
                         df_cl_temp = pd.DataFrame()
                         df_cl_temp["Periodo"] = df_csv["PERIODO"].apply(format_r_string)
                         df_cl_temp["CRN"] = pd.to_numeric(fusion["NRC"], errors='coerce').astype('Int64') if "NRC" in fusion.columns else np.nan
-                        # Intenta jalar la columna Clúster con o sin acento
+                        
+                        # Intentar jalar la columna Clúster dinámicamente según lo que venga de ARGOS o del CSV
                         col_cl_origen = "Clúster" if "Clúster" in df_csv.columns else ("Cluster" if "Cluster" in df_csv.columns else None)
                         df_cl_temp["datocomplementario"] = df_csv[col_cl_origen] if col_cl_origen else np.nan
                         listado_clusters.append(df_cl_temp)
