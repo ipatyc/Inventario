@@ -420,6 +420,29 @@ with tab_err:
 with tab3:
     st.header("Inyección de NRCs y Generación Estricta de Clúster")
     
+    # --- FUNCIONES LOCALES DE RESPALDO PARA EVITAR DEFINED ERRORS ---
+    def _local_limpiar_texto(val):
+        if pd.isna(val) or val is None:
+            return ""
+        s = str(val).strip()
+        if s.lower() == "nan" or s == "":
+            return ""
+        if s.endswith(".0"):
+            s = s[:-2]
+        return s
+
+    def _local_normalizar_mayusculas(val):
+        return _local_limpiar_texto(val).upper()
+
+    def _local_seccion_a_dos_digitos(val):
+        s = _local_limpiar_texto(val)
+        if not s:
+            return ""
+        if s.isdigit():
+            return f"{int(s):02d}"
+        return s
+    # -----------------------------------------------------------------
+
     col_a, col_b, col_c = st.columns(3)
     with col_a: file_argos = st.file_uploader("📊 1. Reporte ARGOS (.csv)", type=["csv"])
     with col_b: files_csv_finales = st.file_uploader("📝 2. Archivos CSV finales (Originales + V1, V2...)", type=["csv"], accept_multiple_files=True)
@@ -432,11 +455,11 @@ with tab3:
                 argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip')
                 argos_df.columns = [str(c).replace('"', '').replace("'", "").strip() for c in argos_df.columns]
                 
-                argos_df["Periodo"] = argos_df["Periodo"].apply(limpiar_texto_r)
-                argos_df["Nivel"] = argos_df["Nivel"].apply(normalizar_mayusculas_r)
-                argos_df["Área"] = argos_df["Área"].apply(normalizar_mayusculas_r)
-                argos_df["No..Curso"] = argos_df["No..Curso"].apply(limpiar_texto_r)
-                argos_df["Grupo"] = argos_df["Grupo"].apply(seccion_a_dos_digitos)
+                argos_df["Periodo"] = argos_df["Periodo"].apply(_local_limpiar_texto)
+                argos_df["Nivel"] = argos_df["Nivel"].apply(_local_normalizar_mayusculas)
+                argos_df["Área"] = argos_df["Área"].apply(_local_normalizar_mayusculas)
+                argos_df["No..Curso"] = argos_df["No..Curso"].apply(_local_limpiar_texto)
+                argos_df["Grupo"] = argos_df["Grupo"].apply(_local_seccion_a_dos_digitos)
                 
                 argos_df["_llave_maestra"] = (argos_df["Periodo"] + "_" + 
                                               argos_df["Nivel"] + "_" + 
@@ -497,13 +520,13 @@ with tab3:
                                 
                                 df_nrc_pestana = df_excel_original.copy()
                                 
-                                df_excel_original["_k_per"] = df_excel_original["Periodo"].apply(limpiar_texto_r)
-                                df_excel_original["_k_sed"] = df_excel_original["Campus"].apply(limpiar_texto_r)
-                                df_excel_original["_k_sec"] = df_excel_original["Sección"].apply(seccion_a_dos_digitos)
+                                df_excel_original["_k_per"] = df_excel_original["Periodo"].apply(_local_limpiar_texto)
+                                df_excel_original["_k_sed"] = df_excel_original["Campus"].apply(_local_limpiar_texto)
+                                df_excel_original["_k_sec"] = df_excel_original["Sección"].apply(_local_seccion_a_dos_digitos)
                                 
-                                df_csv_perfecto["_k_per"] = df_csv_perfecto["PERIODO"].apply(limpiar_texto_r)
-                                df_csv_perfecto["_k_sed"] = df_csv_perfecto["SEDE"].apply(limpiar_texto_r)
-                                df_csv_perfecto["_k_sec"] = df_csv_perfecto["SECCION"].apply(seccion_a_dos_digitos)
+                                df_csv_perfecto["_k_per"] = df_csv_perfecto["PERIODO"].apply(_local_limpiar_texto)
+                                df_csv_perfecto["_k_sed"] = df_csv_perfecto["SEDE"].apply(_local_limpiar_texto)
+                                df_csv_perfecto["_k_sec"] = df_csv_perfecto["SECCION"].apply(_local_seccion_a_dos_digitos)
                                 
                                 df_csv_mapping = df_csv_perfecto[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates(subset=["_k_per", "_k_sed", "_k_sec"])
                                 df_excel_original = df_excel_original.merge(df_csv_mapping, on=["_k_per", "_k_sed", "_k_sec"], how="left")
@@ -511,11 +534,11 @@ with tab3:
                                 df_nrc_pestana["Subject"] = df_excel_original["SUBJ"].combine_first(df_nrc_pestana["Subject"])
                                 df_nrc_pestana["Course"] = df_excel_original["COURSE"].combine_first(df_nrc_pestana["Course"])
                                 
-                                periodo_clean = df_nrc_pestana["Periodo"].apply(limpiar_texto_r)
-                                nivel_clean = df_nrc_pestana["Nivel"].apply(normalizar_mayusculas_r)
-                                subject_clean = df_nrc_pestana["Subject"].apply(normalizar_mayusculas_r)
-                                course_clean = df_nrc_pestana["Course"].apply(limpiar_texto_r)
-                                seccion_clean = df_nrc_pestana["Sección"].apply(seccion_a_dos_digitos)
+                                periodo_clean = df_nrc_pestana["Periodo"].apply(_local_limpiar_texto)
+                                nivel_clean = df_nrc_pestana["Nivel"].apply(_local_normalizar_mayusculas)
+                                subject_clean = df_nrc_pestana["Subject"].apply(_local_normalizar_mayusculas)
+                                course_clean = df_nrc_pestana["Course"].apply(_local_limpiar_texto)
+                                seccion_clean = df_nrc_pestana["Sección"].apply(_local_seccion_a_dos_digitos)
                                 
                                 llaves_filas_excel = (periodo_clean + "_" + nivel_clean + "_" + 
                                                       subject_clean + "_" + course_clean + "_" + seccion_clean)
@@ -550,9 +573,9 @@ with tab3:
                         df_cluster_parcial = pd.DataFrame(filas_para_cluster_maestro)
                         df_cluster_final = pd.DataFrame(columns=COLUMNAS_CLUSTER_FINAL)
                         
-                        df_cluster_final["Periodo"] = df_cluster_parcial["Periodo"].apply(limpiar_texto_r)
+                        df_cluster_final["Periodo"] = df_cluster_parcial["Periodo"].apply(_local_limpiar_texto)
                         df_cluster_final["CRN"] = df_cluster_parcial["CRN"] 
-                        df_cluster_final["datocomplementario"] = df_cluster_parcial["datocomplementario"].apply(limpiar_texto_r)
+                        df_cluster_final["datocomplementario"] = df_cluster_parcial["datocomplementario"].apply(_local_limpiar_texto)
                         
                         df_cluster_final = df_cluster_final.fillna("")
 
