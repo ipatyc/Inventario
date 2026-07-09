@@ -65,14 +65,16 @@ def obtener_base_y_version(filename):
         return s[:match.start()].strip('_ '), int(match.group(1))
     return s.strip(), 0
 
-# Inicialización de estados en memoria de Streamlit
+# Inicialización de estados en memoria global de Streamlit
 if "original_files_bytes" not in st.session_state: st.session_state.original_files_bytes = {}
 if "res_auditoria" not in st.session_state: st.session_state.res_auditoria = None
 if "raw_altas" not in st.session_state: st.session_state.raw_altas = None
 if "ready_for_download" not in st.session_state: st.session_state.ready_for_download = False
 if "zip_file_bytes" not in st.session_state: st.session_state.zip_file_bytes = None
 if "csv_files_to_download" not in st.session_state: st.session_state.csv_files_to_download = {}
-# Memoria nueva para el ZIP final de ARGOS
+# Memoria para fragmentos delta de errores
+if "delta_files" not in st.session_state: st.session_state.delta_files = {}
+# Memoria para el ZIP final consolidado de ARGOS
 if "final_argos_zip" not in st.session_state: st.session_state.final_argos_zip = None
 
 st.set_page_config(page_title="Consola Iris Cavazos", page_icon="🎛️", layout="wide")
@@ -333,8 +335,8 @@ with tab_err:
     dict_csvs_a_procesar = {}
     if origen_csv == "Utilizar un CSV de la Pestaña 1 (En memoria)":
         if st.session_state.csv_files_to_download:
-            opciones = list(st.session_state.csv_files_to_download.keys())
-            sel = st.selectbox("Elige el CSV a depurar:", opciones)
+            options = list(st.session_state.csv_files_to_download.keys())
+            sel = st.selectbox("Elige el CSV a depurar:", options)
             if sel: dict_csvs_a_procesar[sel] = pd.read_csv(io.BytesIO(st.session_state.csv_files_to_download[sel]), encoding="utf-8")
         else:
             st.warning("⚠️ No hay CSVs generados en la memoria de la pestaña 1 aún.")
@@ -347,6 +349,7 @@ with tab_err:
     
     if input_valido and dict_csvs_a_procesar:
         if st.button("🔍 Generar Segmento Corto de Errores", type="primary"):
+            st.session_state.delta_files = {}  # Limpiar memoria vieja de errores
             renglones_errores = []
             if metodo_input == "Subir archivo Excel de Banner":
                 df_err_excel = pd.read_excel(file_errores, skiprows=2)
@@ -360,7 +363,15 @@ with tab_err:
                 if not df_delta.empty:
                     csv_bytes = df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8")
                     out_name = f"{nombre_archivo.rsplit('.', 1)[0]}_V{num_version}.csv"
-                    st.download_button(label=f"📥 Descargar fragmento: {out_name}", data=csv_bytes, file_name=out_name, mime="text/csv", use_container_width=True)
+                    # Guardamos en estado de sesión permanente para evitar que desaparezca
+                    st.session_state.delta_files[out_name] = csv_bytes
+            st.rerun()
+
+    # Renderizado seguro de botones de descarga de errores
+    if st.session_state.delta_files:
+        st.markdown("### 📥 Fragmentos de Error Listos")
+        for out_name, csv_bytes in st.session_state.delta_files.items():
+            st.download_button(label=f"📥 Descargar fragmento: {out_name}", data=csv_bytes, file_name=out_name, mime="text/csv", use_container_width=True)
 
 # ============================================================
 # PESTAÑA 3: INYECTAR EN REPORTE ARGOS (CONTRUCCIÓN EN LOTE)
@@ -410,4 +421,68 @@ with tab3:
                         dict_csvs_agrupados[base_name] = {}
                     dict_csvs_agrupados[base_name][version] = fc
                 
-                dict_csvs_finalizados =
+                dict_csvs_finalizados = {}  # LINEA CORREGIDA COMPLETAMENTE
+                
+                for base_name, versiones in dict_csvs_agrupados.items():
+                    if 0 not in versiones:
+                        st.warning(f"⚠️ Falta el archivo CSV Original para el campus {base_name}. Saltando...")
+                        continue
+                    
+                    # Cargar el CSV Original (Versión 0)
+                    df_base_csv = pd.read_csv(io.BytesIO(versiones[0].getvalue()), encoding="utf-8")
+                    df_base_csv["_k_per"] = df_base_csv["PERIODO"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                    df_base_csv["_k_sed"] = df_base_csv["SEDE"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                    df_base_csv["_k_sec"] = df_base_csv["SECCION"].apply(limpia_seccion_interna)
+                    
+                    # Aplicar correcciones iterativamente (V1, luego V2...)
+                    for v in sorted(versiones.keys()):
+                        if v == 0: continue
+                        df_v = pd.read_csv(io.BytesIO(versiones[v].getvalue()), encoding="utf-8")
+                        df_v["_k_per"] = df_v["PERIODO"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                        df_v["_k_sed"] = df_v["SEDE"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                        df_v["_k_sec"] = df_v["SECCION"].apply(limpia_seccion_interna)
+                        
+                        df_v_unique = df_v[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates()
+                        
+                        df_base_csv = df_base_csv.merge(df_v_unique, on=["_k_per", "_k_sed", "_k_sec"], how="left", suffixes=("", "_new"))
+                        df_base_csv["SUBJ"] = df_base_csv["SUBJ_new"].combine_first(df_base_csv["SUBJ"])
+                        df_base_csv["COURSE"] = df_base_csv["COURSE_new"].combine_first(df_base_csv["COURSE"])
+                        df_base_csv.drop(columns=["SUBJ_new", "COURSE_new"], inplace=True)
+                    
+                    dict_csvs_finalizados[base_name] = df_base_csv
+
+                # ---------------------------------------------------------
+                # 3. ACTUALIZAR EXCEL Y SACAR CLÚSTERES
+                # ---------------------------------------------------------
+                excels_inyectados_zip = io.BytesIO()
+                listado_maestro_clusters = []
+                xlsx_procesados = 0
+                
+                with zipfile.ZipFile(excels_inyectados_zip, "w", zipfile.ZIP_DEFLATED) as zip_out:
+                    
+                    for fx in files_xlsx_originales:
+                        base_x, _ = obtener_base_y_version(fx.name)
+                        
+                        if base_x in dict_csvs_finalizados:
+                            df_csv_perfecto = dict_csvs_finalizados[base_x]
+                            wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
+                            
+                            if HOJA_ALTAS in wb.sheetnames:
+                                ws_altas = wb[HOJA_ALTAS]
+                                data = ws_altas.values
+                                cols = next(data)
+                                df_excel = pd.DataFrame(data, columns=cols)
+                                
+                                # A) Actualizar el Excel con los Subject/Course correctos del CSV Perfecto
+                                df_excel["_k_per"] = df_excel["Periodo"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                                df_excel["_k_sed"] = df_excel["Campus"].astype(str).str.strip().apply(lambda x: x[:-2] if x.endswith(".0") else x)
+                                df_excel["_k_sec"] = df_excel["Sección"].apply(limpia_seccion_interna)
+                                
+                                df_csv_subset = df_csv_perfecto[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates()
+                                df_excel = df_excel.merge(df_csv_subset, on=["_k_per", "_k_sed", "_k_sec"], how="left")
+                                
+                                df_excel["Subject"] = df_excel["SUBJ"].combine_first(df_excel["Subject"])
+                                df_excel["Course"] = df_excel["COURSE"].combine_first(df_excel["Course"])
+                                
+                                # B) Cruzar el Excel corregido con ARGOS para sacar el NRC
+                                df_excel["_k_sub"] = df_excel["Subject"].apply(
