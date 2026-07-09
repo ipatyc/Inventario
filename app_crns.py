@@ -415,86 +415,84 @@ with tab_err:
             st.download_button(label=f"📥 Descargar fragmento: {out_name}", data=csv_bytes, file_name=out_name, mime="text/csv", use_container_width=True)
 
 # ============================================================
-# PESTAÑA 3: INYECTAR EN REPORTE ARGOS (CONTRUCCIÓN EN LOTE)
+# PESTAÑA 3: INYECTAR REPORTE ARGOS Y GENERACIÓN DE CLÚSTER
 # ============================================================
 with tab3:
-    st.header("Inyección Masiva de NRCs y Construcción de Clústeres")
-    st.markdown("Sube tu reporte de ARGOS, los CSV originales + V1/V2, y tus archivos Excel originales.")
+    st.header("Inyección de NRCs y Generación Estricta de Clúster")
     
     col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        file_argos = st.file_uploader("📊 1. Cargar Reporte ARGOS (.csv)", type=["csv"])
-    with col_b:
-        files_csv_finales = st.file_uploader("📝 2. Sube los CSVs (Acepta originales y Versiones V1/V2...)", type=["csv"], accept_multiple_files=True)
-    with col_c:
-        files_xlsx_originales = st.file_uploader("📁 3. Sube los archivos EXCEL originales (.xlsx)", type=["xlsx"], accept_multiple_files=True)
+    with col_a: file_argos = st.file_uploader("📊 1. Reporte ARGOS (.csv)", type=["csv"])
+    with col_b: files_csv_finales = st.file_uploader("📝 2. Archivos CSV finales (Originales + V1, V2...)", type=["csv"], accept_multiple_files=True)
+    with col_c: files_xlsx_originales = st.file_uploader("📁 3. Archivos EXCEL originales (.xlsx)", type=["xlsx"], accept_multiple_files=True)
         
     if file_argos and files_csv_finales and files_xlsx_originales:
-        if st.button("🚀 Ejecutar Cruce Inteligente e Inyección", type="primary"):
+        if st.button("🚀 Procesar Cruce e Inyectar Pestaña NRC + Clúster", type="primary"):
             try:
-                # 1. LEER ARGOS Y ENCONTRAR COLUMNA CRN/NRC
+                # ==============================================================
+                # 1. LEER ARGOS Y APLICAR MUTATE (REGLAS DE R)
+                # ==============================================================
                 argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip')
-                argos_df.columns = [str(c).replace('"', '').replace("'", "").strip() for c in argos_df.columns if c is not None]
+                argos_df.columns = [str(c).replace('"', '').replace("'", "").strip() for c in argos_df.columns]
                 
-                mapa_columnas_argos = {}
-                for col in argos_df.columns:
-                    col_upper = col.upper()
-                    if col_upper in ["PERIODO", "ÁREA", "GRUPO"]:
-                        mapa_columnas_argos[col_upper] = col
-                    elif "CURSO" in col_upper:
-                        mapa_columnas_argos["CURSO"] = col
-                    elif col_upper in ["NRC", "CRN"]:
-                        mapa_columnas_argos["NRC"] = col  # Captura dinámica sea NRC o CRN
+                argos_df["Periodo"] = argos_df["Periodo"].apply(limpiar_texto_r)
+                argos_df["Nivel"] = argos_df["Nivel"].apply(normalizar_mayusculas_r)
+                argos_df["Área"] = argos_df["Área"].apply(normalizar_mayusculas_r)
+                argos_df["No..Curso"] = argos_df["No..Curso"].apply(limpiar_texto_r)
+                argos_df["Grupo"] = argos_df["Grupo"].apply(seccion_a_dos_digitos)
                 
-                # Normalizar llaves en ARGOS
-                argos_df["_k_per"] = argos_df[mapa_columnas_argos["PERIODO"]].apply(limpiar_clave_texto)
-                argos_df["_k_sub"] = argos_df[mapa_columnas_argos["ÁREA"]].apply(normalizar_para_cruce)
-                argos_df["_k_crs"] = argos_df[mapa_columnas_argos["CURSO"]].apply(limpiar_clave_texto)
-                argos_df["_k_sec"] = argos_df[mapa_columnas_argos["GRUPO"]].apply(limpia_seccion_interna)
+                # Generar llave única basada en el "by = c(...)" de R
+                argos_df["_llave_maestra"] = (argos_df["Periodo"] + "_" + 
+                                              argos_df["Nivel"] + "_" + 
+                                              argos_df["Área"] + "_" + 
+                                              argos_df["No..Curso"] + "_" + 
+                                              argos_df["Grupo"])
                 
-                # Crear diccionario para mapeo rápido de NRCs
-                argos_df["_llave_maestra"] = argos_df["_k_per"] + "_" + argos_df["_k_sub"] + "_" + argos_df["_k_crs"] + "_" + argos_df["_k_sec"]
-                mapa_nrcs = dict(zip(argos_df["_llave_maestra"], argos_df[mapa_columnas_argos["NRC"]]))
+                # distinct(NRC, .keep_all = TRUE) a través de un diccionario
+                argos_df = argos_df.drop_duplicates(subset=["_llave_maestra"])
+                mapa_nrcs = dict(zip(argos_df["_llave_maestra"], argos_df["NRC"]))
 
-                # 2. AGRUPAR Y CONSOLIDAR CSVS
+                # ==============================================================
+                # 2. AGRUPAR Y CONSOLIDAR VERSIONES DE LOS CSVS (Base + V1 + V2)
+                # ==============================================================
                 dict_csvs_agrupados = {}
                 for fc in files_csv_finales:
                     base_name, version = obtener_base_y_version(fc.name)
-                    if base_name not in dict_csvs_agrupados:
-                        dict_csvs_agrupados[base_name] = {}
-                    dict_csvs_agrupados[base_name][version] = fc
+                    dict_csvs_agrupados.setdefault(base_name, {})[version] = fc
                 
                 dict_csvs_finalizados = {}  
                 
+                # Usamos estas columnas como "Llave" para saber qué fila actualizar
+                llaves_cruce_csv = ["PERIODO", "SEDE", "SECCION"]
+
                 for base_name, versiones in dict_csvs_agrupados.items():
                     if 0 not in versiones:
-                        continue
-                    df_base_csv = pd.read_csv(io.BytesIO(versiones[0].getvalue()), encoding="utf-8")
-                    df_base_csv["_k_per"] = df_base_csv["PERIODO"].apply(limpiar_clave_texto)
-                    df_base_csv["_k_sed"] = df_base_csv["SEDE"].apply(limpiar_clave_texto)
-                    df_base_csv["_k_sec"] = df_base_csv["SECCION"].apply(limpia_seccion_interna)
+                        continue # Si no hay archivo base, lo saltamos
                     
-                    for v in sorted(versiones.keys()):
-                        if v == 0: 
-                            continue
-                        df_v = pd.read_csv(io.BytesIO(versiones[v].getvalue()), encoding="utf-8")
-                        df_v["_k_per"] = df_v["PERIODO"].apply(limpiar_clave_texto)
-                        df_v["_k_sed"] = df_v["SEDE"].apply(limpiar_clave_texto)
-                        df_v["_k_sec"] = df_v["SECCION"].apply(limpia_seccion_interna)
+                    df_base_csv = pd.read_csv(io.BytesIO(versiones[0].getvalue()), encoding="utf-8")
+                    
+                    # Consolidar cambios usando un índice para que la actualización sea exacta en la fila correcta
+                    if all(col in df_base_csv.columns for col in llaves_cruce_csv):
+                        df_base_csv.set_index(llaves_cruce_csv, inplace=True, drop=False)
                         
-                        df_v_unique = df_v[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates(subset=["_k_per", "_k_sed", "_k_sec"])
-                        df_base_csv = df_base_csv.merge(df_v_unique, on=["_k_per", "_k_sed", "_k_sec"], how="left", suffixes=("", "_new"))
-                        if "SUBJ_new" in df_base_csv.columns:
-                            df_base_csv["SUBJ"] = df_base_csv["SUBJ_new"].combine_first(df_base_csv["SUBJ"])
-                            df_base_csv["COURSE"] = df_base_csv["COURSE_new"].combine_first(df_base_csv["COURSE"])
-                            df_base_csv.drop(columns=["SUBJ_new", "COURSE_new"], inplace=True)
+                        for v in sorted(versiones.keys()):
+                            if v == 0: continue
+                            df_v = pd.read_csv(io.BytesIO(versiones[v].getvalue()), encoding="utf-8")
+                            
+                            # Validar que el V1/V2 tenga las llaves antes de aplicarlo
+                            if all(col in df_v.columns for col in llaves_cruce_csv):
+                                df_v.set_index(llaves_cruce_csv, inplace=True, drop=False)
+                                # Actualiza el base con los datos de df_v (solo sobreescribe lo que hace match)
+                                df_base_csv.update(df_v)
+                        
+                        df_base_csv.reset_index(drop=True, inplace=True)
                     
                     dict_csvs_finalizados[base_name] = df_base_csv
 
-                # 3. CONSTRUCCIÓN DE ARCHIVOS EXCEL (PESTAÑA NRC) Y CLÚSTER CORREGIDO
+                # ==============================================================
+                # 3. PROCESAR CADA EXCEL (Inyectar Pestaña NRC y recolectar Clúster)
+                # ==============================================================
                 excels_inyectados_zip = io.BytesIO()
-                listado_maestro_clusters = []
-                xlsx_procesados = 0
+                filas_para_cluster_maestro = []
                 
                 with zipfile.ZipFile(excels_inyectados_zip, "w", zipfile.ZIP_DEFLATED) as zip_out:
                     for fx in files_xlsx_originales:
@@ -506,79 +504,104 @@ with tab3:
                             
                             if HOJA_ALTAS in wb.sheetnames:
                                 ws_altas = wb[HOJA_ALTAS]
-                                data = ws_altas.values
-                                cols = next(data)
-                                cols = [str(c).strip() if c is not None else f"Unnamed_{i}" for i, c in enumerate(cols)]
-                                df_excel = pd.DataFrame(data, columns=cols)
+                                data = list(ws_altas.values)
+                                header_excel = [str(c).strip() if c is not None else "" for c in data[0]]
+                                df_excel_original = pd.DataFrame(data[1:], columns=header_excel)
                                 
-                                # Conservar exactamente las filas del excel
-                                df_excel["_k_per"] = df_excel["Periodo"].apply(limpiar_clave_texto)
-                                df_excel["_k_sed"] = df_excel["Campus"].apply(limpiar_clave_texto)
-                                df_excel["_k_sec"] = df_excel["Sección"].apply(limpia_seccion_interna)
+                                # Copia exacta para la pestaña NRC
+                                df_nrc_pestana = df_excel_original.copy()
                                 
-                                df_csv_subset = df_csv_perfecto[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates(subset=["_k_per", "_k_sed", "_k_sec"])
-                                df_excel = df_excel.merge(df_csv_subset, on=["_k_per", "_k_sed", "_k_sec"], how="left")
+                                # Normalizaciones para asegurar el cruce limpio
+                                df_excel_original["_k_per"] = df_excel_original["Periodo"].apply(limpiar_texto_r)
+                                df_excel_original["_k_sed"] = df_excel_original["Campus"].apply(limpiar_texto_r)
+                                df_excel_original["_k_sec"] = df_excel_original["Sección"].apply(seccion_a_dos_digitos)
                                 
-                                df_excel["Subject"] = df_excel["SUBJ"].combine_first(df_excel["Subject"])
-                                df_excel["Course"] = df_excel["COURSE"].combine_first(df_excel["Course"])
+                                df_csv_perfecto["_k_per"] = df_csv_perfecto["PERIODO"].apply(limpiar_texto_r)
+                                df_csv_perfecto["_k_sed"] = df_csv_perfecto["SEDE"].apply(limpiar_texto_r)
+                                df_csv_perfecto["_k_sec"] = df_csv_perfecto["SECCION"].apply(seccion_a_dos_digitos)
                                 
-                                df_excel["_k_sub"] = df_excel["Subject"].apply(normalizar_para_cruce)
-                                df_excel["_k_crs"] = df_excel["Course"].apply(limpiar_clave_texto)
+                                # Sincronizar cambios desde el CSV consolidado a la pestaña NRC
+                                df_csv_mapping = df_csv_perfecto[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates(subset=["_k_per", "_k_sed", "_k_sec"])
+                                df_excel_original = df_excel_original.merge(df_csv_mapping, on=["_k_per", "_k_sed", "_k_sec"], how="left")
                                 
-                                # Generar llave exacta de cruce por fila
-                                df_excel["_llave_fila"] = df_excel["_k_per"] + "_" + df_excel["_k_sub"] + "_" + df_excel["_k_crs"] + "_" + df_excel["_k_sec"]
+                                df_nrc_pestana["Subject"] = df_excel_original["SUBJ"].combine_first(df_nrc_pestana["Subject"])
+                                df_nrc_pestana["Course"] = df_excel_original["COURSE"].combine_first(df_nrc_pestana["Course"])
                                 
-                                # Inyección directa y blindada del NRC sin romper el DataFrame de Pandas
-                                df_excel["NRC"] = df_excel["_llave_fila"].map(mapa_nrcs)
+                                # Mapear contra ARGOS
+                                periodo_clean = df_nrc_pestana["Periodo"].apply(limpiar_texto_r)
+                                nivel_clean = df_nrc_pestana["Nivel"].apply(normalizar_mayusculas_r)
+                                subject_clean = df_nrc_pestana["Subject"].apply(normalizar_mayusculas_r)
+                                course_clean = df_nrc_pestana["Course"].apply(limpiar_texto_r)
+                                seccion_clean = df_nrc_pestana["Sección"].apply(seccion_a_dos_digitos)
                                 
-                                # Limpiar columnas temporales
-                                cols_to_drop = [c for c in df_excel.columns if (isinstance(c, str) and c.startswith("_k_")) or c in ["SUBJ", "COURSE", "_llave_fila"]]
-                                df_final_excel = df_excel.drop(columns=cols_to_drop)
+                                llaves_filas_excel = (periodo_clean + "_" + nivel_clean + "_" + 
+                                                      subject_clean + "_" + course_clean + "_" + seccion_clean)
                                 
-                                # Mover la columna NRC al inicio
-                                if "NRC" in df_final_excel.columns:
-                                    orden_columnas = ["NRC"] + [c for c in df_final_excel.columns if c != "NRC"]
-                                    df_final_excel = df_final_excel[orden_columnas]
+                                vec_nrc = llaves_filas_excel.map(mapa_nrcs)
                                 
-                                # Generar Pestaña "NRC" en el archivo Excel
+                                # Inyectar la columna NRC al inicio de la pestaña (Posición 0)
+                                df_nrc_pestana.insert(0, "NRC", vec_nrc)
+                                
+                                # Guardar la nueva hoja en el Excel
                                 if HOJA_SALIDA_NRC in wb.sheetnames:
                                     del wb[HOJA_SALIDA_NRC]
                                 ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
                                 
-                                ws_nrc.append(list(df_final_excel.columns))
-                                for fila_datos in df_final_excel.values:
-                                    row_clean = [None if pd.isna(v) else v for v in fila_datos]
-                                    ws_nrc.append(row_clean)
+                                ws_nrc.append(list(df_nrc_pestana.columns))
+                                for fila in df_nrc_pestana.values:
+                                    ws_nrc.append([None if pd.isna(v) else v for v in fila])
                                 
                                 excel_buffer = io.BytesIO()
                                 wb.save(excel_buffer)
                                 zip_out.writestr(fx.name, excel_buffer.getvalue())
-                                xlsx_procesados += 1
                                 
-                                # Guardar una copia limpia de esta pestaña armada para el Clúster
-                                listado_maestro_clusters.append(df_final_excel.copy())
+                                # =========================================================
+                                # --- RECOLECCIÓN ESTRICTA PARA EL CSV DE CLÚSTER ---
+                                # =========================================================
+                                # Tomamos solo las 3 variables requeridas de cada fila
+                                for idx_row, row_ex in df_excel_original.iterrows():
+                                    filas_para_cluster_maestro.append({
+                                        "Periodo": row_ex.get("Periodo"),
+                                        "CRN": vec_nrc.iloc[idx_row], # El NRC mapeado en este paso
+                                        "datocomplementario": row_ex.get("Clúster")
+                                    })
                         else:
-                            st.warning(f"⚠️ El archivo Excel `{fx.name}` no encontró su CSV original correspondiente.")
+                            st.warning(f"⚠️ El archivo Excel `{fx.name}` no encontró su CSV correspondiente.")
 
-                    # GENERACIÓN DEL CLÚSTER UNIFICADO CORRECTO (Acumulación directa de celdas)
-                    if listado_maestro_clusters:
-                        df_cluster_total = pd.concat(listado_maestro_clusters, ignore_index=True)
-                        csv_cluster_bytes = df_cluster_total.to_csv(**CSV_KWARGS_R).encode("utf-8")
+                    # ==============================================================
+                    # 4. ESCRITURA DEL CSV DE CLÚSTER UNIFICADO CON FORMATO EXACTO
+                    # ==============================================================
+                    if filas_para_cluster_maestro:
+                        df_cluster_parcial = pd.DataFrame(filas_para_cluster_maestro)
+                        
+                        # Creamos el dataframe final forzando que tenga TODAS las columnas pedidas vacías
+                        df_cluster_final = pd.DataFrame(columns=COLUMNAS_CLUSTER_FINAL)
+                        
+                        # Asignamos únicamente las 3 columnas solicitadas
+                        df_cluster_final["Periodo"] = df_cluster_parcial["Periodo"].apply(limpiar_texto_r)
+                        df_cluster_final["CRN"] = df_cluster_parcial["CRN"] # El NRC mapeado de Argos
+                        df_cluster_final["datocomplementario"] = df_cluster_parcial["datocomplementario"].apply(limpiar_texto_r)
+                        
+                        # Rellenar las demás columnas con cadena vacía para que no aparezcan NAs raros si el usuario no los quiere
+                        df_cluster_final = df_cluster_final.fillna("")
+
+                        # Generamos el CSV final
+                        csv_cluster_bytes = df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
                         zip_out.writestr("cluster_unificado.csv", csv_cluster_bytes)
 
                 st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
-                st.success(f"🎉 ¡Procesamiento Exitoso! Se generó la pestaña NRC y el Clúster Unificado con las columnas originales.")
+                st.success("🎉 ¡Proceso finalizado! Excel actualizados y CSV de Clúster generado con estructura exacta.")
                 st.rerun()
 
             except Exception as e:
-                st.error(f"❌ Error crítico durante el procesamiento: {str(e)}")
+                st.error(f"❌ Ocurrió un inconveniente: {str(e)}")
 
     if st.session_state.final_argos_zip is not None:
-        st.markdown("### 📥 Panel de Resultados Listos")
+        st.markdown("### 📥 Panel de Descarga")
         st.download_button(
-            label="📁 📥 DESCARGAR PAQUETE FINAL (.ZIP con Excels + Clúster)",
+            label="📁 📥 DESCARGAR PAQUETE FINAL (.ZIP con Excels modificados + Clúster)",
             data=st.session_state.final_argos_zip,
-            file_name="Paquete_Final_ARGOS.zip",
+            file_name="Paquete_Final_ARGOS_y_Cluster.zip",
             mime="application/zip",
             use_container_width=True,
             type="primary"
