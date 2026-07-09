@@ -454,22 +454,19 @@ with tab3:
                 # 1. LEER ARGOS Y LIMPIAR COLUMNAS
                 argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip')
                 
-                # Normalización estricta de nombres de columnas para evitar fallos por puntos o espacios
+                # Normalización de encabezados
                 argos_df.columns = [
                     re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) 
                     for c in argos_df.columns
                 ]
                 
-                # Mapeo flexible por si acaso quedó un punto o dos
                 col_curso = "No.Curso" if "No.Curso" in argos_df.columns else ("No..Curso" if "No..Curso" in argos_df.columns else None)
-                
                 if col_curso is None:
-                    # Si no encuentra ninguna variación, intentamos buscar una columna que contenga "Curso"
                     columnas_candidatas = [c for c in argos_df.columns if "Curso" in c]
                     if columnas_candidatas:
                         col_curso = columnas_candidatas[0]
                     else:
-                        raise KeyError("No se encontró la columna del número de curso (ej. 'No..Curso') en el reporte de ARGOS.")
+                        raise KeyError("No se encontró la columna del número de curso en el reporte de ARGOS.")
 
                 argos_df["Periodo"] = argos_df["Periodo"].apply(_local_limpiar_texto)
                 argos_df["Nivel"] = argos_df["Nivel"].apply(_local_normalizar_mayusculas)
@@ -486,35 +483,36 @@ with tab3:
                 argos_df = argos_df.drop_duplicates(subset=["_llave_maestra"])
                 mapa_nrcs = dict(zip(argos_df["_llave_maestra"], argos_df["NRC"]))
 
-                # 2. AGRUPAR Y CONSOLIDAR VERSIONES DE LOS CSVS
+                # 2. CONSOLIDAR VERSIONES SIN USAR .update() NI COINCIDENCIA DE ÍNDICES
                 dict_csvs_agrupados = {}
                 for fc in files_csv_finales:
                     base_name, version = obtener_base_y_version(fc.name)
                     dict_csvs_agrupados.setdefault(base_name, {})[version] = fc
                 
                 dict_csvs_finalizados = {}  
-                llaves_cruce_csv = ["PERIODO", "SEDE", "SECCION"]
 
                 for base_name, versiones in dict_csvs_agrupados.items():
-                    if 0 not in versiones:
-                        continue 
+                    lista_dfs = []
+                    for v in sorted(versiones.keys()):
+                        df_v = pd.read_csv(io.BytesIO(versiones[v].getvalue()), encoding="utf-8")
+                        df_v.reset_index(drop=True, inplace=True)
+                        lista_dfs.append(df_v)
                     
-                    df_base_csv = pd.read_csv(io.BytesIO(versiones[0].getvalue()), encoding="utf-8")
+                    if not lista_dfs:
+                        continue
                     
-                    if all(col in df_base_csv.columns for col in llaves_cruce_csv):
-                        df_base_csv.set_index(llaves_cruce_csv, inplace=True, drop=False)
+                    df_consolidado = pd.concat(lista_dfs, ignore_index=True)
+                    df_consolidado.reset_index(drop=True, inplace=True)
+                    
+                    if "PERIODO" in df_consolidado.columns and "SEDE" in df_consolidado.columns and "SECCION" in df_consolidado.columns:
+                        df_consolidado["_temp_per"] = df_consolidado["PERIODO"].apply(_local_limpiar_texto)
+                        df_consolidado["_temp_sed"] = df_consolidado["SEDE"].apply(_local_limpiar_texto)
+                        df_consolidado["_temp_sec"] = df_consolidado["SECCION"].apply(_local_seccion_a_dos_digitos)
                         
-                        for v in sorted(versiones.keys()):
-                            if v == 0: continue
-                            df_v = pd.read_csv(io.BytesIO(versiones[v].getvalue()), encoding="utf-8")
-                            
-                            if all(col in df_v.columns for col in llaves_cruce_csv):
-                                df_v.set_index(llaves_cruce_csv, inplace=True, drop=False)
-                                df_base_csv.update(df_v)
-                        
-                        df_base_csv.reset_index(drop=True, inplace=True)
+                        df_consolidado = df_consolidado.drop_duplicates(subset=["_temp_per", "_temp_sed", "_temp_sec"], keep='last')
+                        df_consolidado.drop(columns=["_temp_per", "_temp_sed", "_temp_sec"], inplace=True)
                     
-                    dict_csvs_finalizados[base_name] = df_base_csv
+                    dict_csvs_finalizados[base_name] = df_consolidado.reset_index(drop=True)
 
                 # 3. PROCESAR CADA EXCEL
                 excels_inyectados_zip = io.BytesIO()
@@ -545,6 +543,7 @@ with tab3:
                                 df_csv_perfecto["_k_sec"] = df_csv_perfecto["SECCION"].apply(_local_seccion_a_dos_digitos)
                                 
                                 df_csv_mapping = df_csv_perfecto[["_k_per", "_k_sed", "_k_sec", "SUBJ", "COURSE"]].drop_duplicates(subset=["_k_per", "_k_sed", "_k_sec"])
+                                
                                 df_excel_original = df_excel_original.merge(df_csv_mapping, on=["_k_per", "_k_sed", "_k_sec"], how="left")
                                 
                                 df_nrc_pestana["Subject"] = df_excel_original["SUBJ"].combine_first(df_nrc_pestana["Subject"])
@@ -599,7 +598,7 @@ with tab3:
                         zip_out.writestr("cluster_unificado.csv", csv_cluster_bytes)
 
                 st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
-                st.success("🎉 ¡Proceso finalizado! Excel actualizados y CSV de Clúster generado con estructura exacta.")
+                st.success("🎉 ¡Proceso finalizado! Excels actualizados y CSV de Clúster generado con estructura exacta.")
                 st.rerun()
 
             except Exception as e:
