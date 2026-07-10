@@ -516,7 +516,6 @@ with tab3:
                 filas_para_cluster_maestro = []
                 archivos_procesados_con_exito = 0
                 
-                # Listas para recolectar alertas y mostrarlas al final sin que desaparezcan
                 alertas_dimensiones = []
                 alertas_parejas = []
                 
@@ -544,9 +543,24 @@ with tab3:
                                 
                                 df_excel_original = pd.DataFrame(data[1:], columns=[str(c).strip() if c is not None else "" for c in data[0]])
                                 
-                                # 🔥 RECOLECTAR ERROR SI NO COINCIDEN LAS FILAS
+                                # 🔥 EXORCISTA DE FILAS FANTASMAS 🔥
+                                # Borra los renglones que están completamente vacíos o que solo tienen celdas "None"
+                                df_excel_original = df_excel_original.dropna(how='all')
+                                df_csv = df_csv.dropna(how='all')
+                                
+                                # Si Excel metió "espacios en blanco" en lugar de None, nos aseguramos limpiando filas sin Periodo
+                                if "Periodo" in df_excel_original.columns:
+                                    df_excel_original = df_excel_original[df_excel_original["Periodo"].astype(str).str.strip() != ""]
+                                if "PERIODO" in df_csv.columns:
+                                    df_csv = df_csv[df_csv["PERIODO"].astype(str).str.strip() != ""]
+                                
+                                # Re-seteamos los índices para que no haya brincos al pegar los datos
+                                df_excel_original = df_excel_original.reset_index(drop=True)
+                                df_csv = df_csv.reset_index(drop=True)
+                                
+                                # AHORA SÍ, VALIDAMOS LAS DIMENSIONES
                                 if len(df_excel_original) != len(df_csv):
-                                    alertas_dimensiones.append(f"❌ Excel `{fx.name}` tiene **{len(df_excel_original)} filas**, pero el CSV `{fc_usado.name}` tiene **{len(df_csv)} filas**.")
+                                    alertas_dimensiones.append(f"❌ Excel `{fx.name}` tiene **{len(df_excel_original)} filas de datos**, pero el CSV `{fc_usado.name}` tiene **{len(df_csv)} filas de datos**.")
                                     continue
                                 
                                 df_nrc_pestana = pd.DataFrame({
@@ -610,16 +624,15 @@ with tab3:
                         csv_cluster_bytes = df_cluster_final.fillna("").to_csv(**CSV_KWARGS_R).encode("utf-8")
                         zip_out.writestr("cluster_unificado.csv", csv_cluster_bytes)
 
-                # --- IMPRESIÓN DE RESULTADOS Y ALERTAS FIJAS ---
+                # --- IMPRESIÓN DE RESULTADOS ---
                 if archivos_procesados_con_exito > 0:
                     st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
                     st.success(f"🎉 ¡Paquete final generado! Se procesaron {archivos_procesados_con_exito} archivos exitosamente.")
                 else:
-                    st.error("❌ No se pudo procesar ningún archivo al 100%. Revisa las alertas abajo.")
+                    st.error("❌ No se pudo procesar ningún archivo.")
                 
-                # Mostrar los errores para que puedas leerlos con calma
                 if alertas_dimensiones:
-                    st.markdown("### 🚫 Archivos descartados por diferencia de filas:")
+                    st.markdown("### 🚫 Archivos descartados por diferencia de filas (ya descontando filas fantasmas):")
                     for alerta in alertas_dimensiones:
                         st.error(alerta)
                 
@@ -642,5 +655,3 @@ with tab3:
             use_container_width=True,
             type="primary"
         )
-        
-
