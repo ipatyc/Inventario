@@ -362,7 +362,7 @@ with tab1:
 # ============================================================
 with tab_err:
     st.header("⚠️ Reporte de Errores y Ensamblaje Final")
-    st.markdown("Extrae filas con error, corrígelas (en vivo o en Excel) y genera el archivo **_final** para la Pestaña 3.")
+    st.markdown("Extrae filas con error, corrígelas y genera el archivo **_final** para la Pestaña 3.")
     
     # --- PASO 1: EXTRAER O EDITAR EL PEDACITO CON ERROR ---
     st.subheader("✂️ 1. Extraer o corregir el pedacito con errores")
@@ -372,7 +372,7 @@ with tab_err:
     with col_ex2: file_err_ext = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ex_err")
     
     if file_base_ext and file_err_ext:
-        # 🛡️ FIX: Leer todo como texto (dtype=str)
+        # Leer todo como texto (dtype=str)
         df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
         df_err = pd.read_excel(file_err_ext, skiprows=2)
         
@@ -382,16 +382,25 @@ with tab_err:
         if indices:
             df_delta = df_base.iloc[indices].copy()
             
-            # 🔥 REGRESA LA EDICIÓN EN VIVO
+            # 🔥 LAS 3 OPCIONES DE EXTRACCIÓN
             modo_delta = st.radio(
-                "⚙️ ¿Qué deseas hacer con las filas con error?", 
-                ["Descargar para corregir en Excel", "Editar en vivo en la consola"],
+                "⚙️ ¿Cómo deseas corregir las filas con error?", 
+                ["Descargar en Excel (.xlsx)", "Descargar en formato CSV (.csv)", "Editar en vivo en la consola"],
                 horizontal=True
             )
             
-            if modo_delta == "Descargar para corregir en Excel":
+            if modo_delta == "Descargar en Excel (.xlsx)":
+                excel_buffer = io.BytesIO()
+                df_delta.to_excel(excel_buffer, index=False)
                 st.download_button(
-                    "📥 Descargar Fragmento para Corregir", 
+                    "📥 Descargar Fragmento en Excel", 
+                    data=excel_buffer.getvalue(), 
+                    file_name=f"Errores_{file_base_ext.name.rsplit('.', 1)[0]}.xlsx", 
+                    type="secondary"
+                )
+            elif modo_delta == "Descargar en formato CSV (.csv)":
+                st.download_button(
+                    "📥 Descargar Fragmento en CSV", 
                     data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
                     file_name=f"Errores_{file_base_ext.name}", 
                     type="secondary"
@@ -400,7 +409,7 @@ with tab_err:
                 st.caption("Edita los datos directamente en la tabla y descarga el pedacito ya corregido.")
                 df_editado = st.data_editor(df_delta, key="ed_vivo", use_container_width=True)
                 st.download_button(
-                    "📥 Descargar Fragmento Corregido", 
+                    "📥 Descargar Fragmento Corregido (.csv)", 
                     data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
                     file_name=f"Corregidas_{file_base_ext.name}", 
                     type="primary"
@@ -417,15 +426,20 @@ with tab_err:
     col_in1, col_in2, col_in3 = st.columns(3)
     with col_in1: file_base_iny = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="in_base_2")
     with col_in2: file_err_iny = st.file_uploader("📊 2. Reporte de Errores (.xlsx)", type=["xlsx"], key="in_err_2")
-    with col_in3: file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido (.csv)", type=["csv"], key="in_corr_2")
+    # Aceptamos tanto .csv como .xlsx para la comodidad del usuario
+    with col_in3: file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido", type=["csv", "xlsx"], key="in_corr_2")
     
     if file_base_iny and file_err_iny and file_corr_iny:
         if st.button("🚀 Ensamblar Archivo Final", type="primary"):
             try:
-                # 🛡️ FIX: Leer todo como texto puro
                 df_base = pd.read_csv(file_base_iny, encoding="utf-8", dtype=str)
                 df_err = pd.read_excel(file_err_iny, skiprows=2)
-                df_corr = pd.read_csv(file_corr_iny, encoding="utf-8", dtype=str)
+                
+                # Leer el parche dependiendo de si subieron un Excel o un CSV
+                if file_corr_iny.name.lower().endswith('.xlsx'):
+                    df_corr = pd.read_excel(file_corr_iny, dtype=str)
+                else:
+                    df_corr = pd.read_csv(file_corr_iny, encoding="utf-8", dtype=str)
                 
                 renglones = df_err["Línea"].dropna().astype(int).unique().tolist()
                 indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
@@ -433,12 +447,11 @@ with tab_err:
                 if len(indices) == len(df_corr):
                     df_final = df_base.copy()
                     
-                    # 🛡️ FIX: Inyección quirúrgica para no tener choques de tipos (dtypes)
+                    # Inyección quirúrgica
                     for col in df_final.columns:
                         if col in df_corr.columns:
                             df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
                     
-                    # Limpiamos el nombre
                     base_name = file_base_iny.name.rsplit('.', 1)[0]
                     out_name = f"{base_name.replace('_base', '').replace('_final', '')}_final.csv"
                     
