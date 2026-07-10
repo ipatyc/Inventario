@@ -504,46 +504,39 @@ with tab3:
                 argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
                 mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
 
-                # 2. AGRUPAR CSVs FINALIZADOS
-                dict_csvs_finalizados = {obtener_base_y_version(fc.name)[0]: pd.read_csv(io.BytesIO(fc.getvalue()), encoding="utf-8", dtype=str) for fc in files_csv_finales}
+                # 2. ORDENAR ARCHIVOS PARA PROCESAR POR POSICIÓN
+                lista_csvs = sorted(files_csv_finales, key=lambda x: x.name)
+                lista_excels = sorted(files_xlsx_originales, key=lambda x: x.name)
 
-                # 3. PROCESAR EXCELS
+                # 3. PROCESAR CADA PAR
                 excels_inyectados_zip = io.BytesIO()
                 filas_para_cluster_maestro = []
                 
                 with zipfile.ZipFile(excels_inyectados_zip, "w", zipfile.ZIP_DEFLATED) as zip_out:
-                    for fx in files_xlsx_originales:
-                        base_x, _ = obtener_base_y_version(fx.name)
-                        csv_coincidente = next((df for name, df in dict_csvs_finalizados.items() if base_x in name), None)
+                    for i in range(len(lista_excels)):
+                        fx = lista_excels[i]
                         
-                        if csv_coincidente is not None:
-                            df_csv = csv_coincidente
+                        if i < len(lista_csvs):
+                            fc = lista_csvs[i]
+                            df_csv = pd.read_csv(io.BytesIO(fc.getvalue()), encoding="utf-8", dtype=str)
                             wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
                             df_excel_original = pd.DataFrame(list(wb[HOJA_ALTAS].values)[1:], columns=[str(c).strip() for c in list(wb[HOJA_ALTAS].values)[0]])
                             
                             if len(df_excel_original) != len(df_csv):
-                                st.error(f"❌ Error en {fx.name}: El Excel ({len(df_excel_original)}) y el CSV ({len(df_csv)}) no coinciden.")
+                                st.error(f"❌ Error: {fx.name} y {fc.name} no coinciden en número de filas.")
                                 continue
                             
-                            # --- APLICAR TRANSFORMACIONES DE R (LAS 14 COLUMNAS) ---
+                            # --- Mapeo de Equivalencias (14 columnas) ---
                             df_nrc_pestana = pd.DataFrame({
-                                "PERIODO": df_csv["PERIODO"],
-                                "SEDE": df_csv["SEDE"],
-                                "SUBJ": df_csv["SUBJ"],
-                                "COURSE": df_csv["COURSE"],
-                                "PARTEPERIODO": df_csv["PARTEPERIODO"],
-                                "STATUS": df_csv["STATUS"],
-                                "CAPACIDAD": df_csv["CAPACIDAD"],
-                                "GRUPOS": "1",
+                                "PERIODO": df_csv["PERIODO"], "SEDE": df_csv["SEDE"], "SUBJ": df_csv["SUBJ"],
+                                "COURSE": df_csv["COURSE"], "PARTEPERIODO": df_csv["PARTEPERIODO"], "STATUS": df_csv["STATUS"],
+                                "CAPACIDAD": df_csv["CAPACIDAD"], "GRUPOS": "1",
                                 "SECCION": pd.to_numeric(df_csv["SECCION"], errors='coerce'),
-                                "TIPODEHORARIO": df_csv["TIPODEHORARIO"],
-                                "METODO_EDUCATIVO": df_csv["METODO_EDUCATIVO"],
-                                "SOCIODEINTEGRACION": "D2L",
-                                "MODODECALIFICAR": df_csv["MODODECALIFICAR"],
-                                "SESION": df_csv["SESION"]
+                                "TIPODEHORARIO": df_csv["TIPODEHORARIO"], "METODO_EDUCATIVO": df_csv["METODO_EDUCATIVO"],
+                                "SOCIODEINTEGRACION": "D2L", "MODODECALIFICAR": df_csv["MODODECALIFICAR"], "SESION": df_csv["SESION"]
                             })
                             
-                            # Llave para cruce
+                            # Llave de cruce
                             llaves = (df_nrc_pestana["PERIODO"].apply(limpiar_clave_texto) + "_" + 
                                       df_excel_original["Nivel"].apply(normalizar_para_cruce) + "_" + 
                                       df_nrc_pestana["SUBJ"].apply(normalizar_para_cruce) + "_" + 
@@ -552,7 +545,7 @@ with tab3:
                             
                             df_nrc_pestana.insert(0, "NRC", llaves.map(mapa_nrcs))
                             
-                            # Guardar en nueva hoja
+                            # Guardar en nueva hoja NRC
                             if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
                             ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
                             ws_nrc.append(list(df_nrc_pestana.columns))
@@ -566,9 +559,9 @@ with tab3:
                             for idx, row in df_excel_original.iterrows():
                                 filas_para_cluster_maestro.append({"Periodo": row.get("Periodo"), "CRN": df_nrc_pestana.iloc[idx, 0], "datocomplementario": row.get("Clúster")})
                         else:
-                            st.warning(f"⚠️ `{fx.name}` no encontró CSV.")
+                            st.warning(f"⚠️ `{fx.name}` no encontró CSV correspondiente.")
 
-                    # 4. CSV MAESTRO CLÚSTER
+                    # 4. CSV MAESTRO CLÚSTER (24 COLUMNAS)
                     if filas_para_cluster_maestro:
                         df_cluster = pd.DataFrame(columns=COLUMNAS_CLUSTER_FINAL)
                         df_parcial = pd.DataFrame(filas_para_cluster_maestro)
