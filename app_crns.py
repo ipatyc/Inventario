@@ -358,116 +358,83 @@ with tab1:
             )
 
 # ============================================================
-# PESTAÑA 2: REPORTE DE ERRORES Y CORRECCIÓN (FLUJO SECUENCIAL)
+# PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
 with tab_err:
-    st.header("⚠️ Reporte de Errores y Ensamblaje de Correcciones")
-    st.markdown("Extrae los renglones con error, corrígelos (en Excel o en vivo) y vuelve a inyectarlos al archivo original.")
+    st.header("⚠️ Extracción y Ensamblaje de Errores (Banner)")
+    st.markdown("Proceso independiente para extraer filas malas y volver a inyectarlas una vez corregidas.")
     
-    # --- PASO 1: DEFINIR ERRORES Y CSV BASE ---
-    st.subheader("1️⃣ Identificar Errores y CSV Base")
-    col_err1, col_err2 = st.columns(2)
-    with col_err1:
-        metodo_input = st.radio("🛠️ Ingreso de líneas fallidas:", ["Subir archivo Excel de Banner", "Escribir números de línea manualmente"])
-        file_errores = st.file_uploader("📥 Reporte de Errores (.xlsx)", type=["xlsx"]) if metodo_input == "Subir archivo Excel de Banner" else None
-        txt_errores = st.text_input("✍️ Líneas (Ej. 4, 18):") if metodo_input == "Escribir números de línea manualmente" else ""
-        
-    with col_err2:
-        origen_csv = st.radio("📂 ¿Qué CSV base vas a usar?", ["Utilizar un CSV de la Pestaña 1", "Subir un CSV completo desde mi equipo"])
-        dict_csvs_a_procesar = {}
-        if origen_csv == "Utilizar un CSV de la Pestaña 1":
-            if st.session_state.csv_files_to_download:
-                sel = st.selectbox("Elige el CSV base:", list(st.session_state.csv_files_to_download.keys()))
-                if sel: dict_csvs_a_procesar[sel] = pd.read_csv(io.BytesIO(st.session_state.csv_files_to_download[sel]), encoding="utf-8")
-            else:
-                st.warning("⚠️ No hay CSVs generados en memoria.")
-        else:
-            file_csv_manual = st.file_uploader("Sube el CSV base original", type=["csv"])
-            if file_csv_manual: dict_csvs_a_procesar[file_csv_manual.name] = pd.read_csv(file_csv_manual, encoding="utf-8")
-
-    # Mapear los índices (renglones) exactos
-    indices_error = []
-    if file_errores or txt_errores.strip():
-        if metodo_input == "Subir archivo Excel de Banner" and file_errores:
-            df_err_excel = pd.read_excel(file_errores, skiprows=2)
-            renglones = df_err_excel["Línea"].dropna().astype(int).unique().tolist()
-            indices_error = [r - 2 for r in renglones]
-        elif metodo_input != "Subir archivo Excel de Banner" and txt_errores.strip():
-            renglones = [int(p.strip()) for p in txt_errores.split(",") if p.strip().isdigit()]
-            indices_error = [r - 2 for r in renglones]
-
-    st.markdown("---")
+    # ---------------------------------------------------------
+    # PASO 1: EXTRAER EL PEDACITO CON ERROR
+    # ---------------------------------------------------------
+    st.subheader("✂️ 1. Extraer el pedacito con errores")
+    st.markdown("Sube tu Base y el Reporte de Banner para descargar las filas que debes corregir.")
     
-    # --- PASO 2: EXTRAER O EDITAR EL FRAGMENTO (DELTA) ---
-    st.subheader("2️⃣ Obtener Filas para Corregir")
-    st.markdown("Decide cómo quieres tratar las filas que fallaron.")
+    col_ex1, col_ex2 = st.columns(2)
+    with col_ex1: file_base_ext = st.file_uploader("📁 1. Archivo Base Original (.csv)", type=["csv"], key="ex_base")
+    with col_ex2: file_err_ext = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ex_err")
     
-    if dict_csvs_a_procesar and indices_error:
-        for nombre_archivo, df_base in dict_csvs_a_procesar.items():
-            indices_validos = [i for i in indices_error if 0 <= i < len(df_base)]
+    if file_base_ext and file_err_ext:
+        if st.button("✂️ Descargar Pedacito a Corregir"):
+            df_base = pd.read_csv(file_base_ext, encoding="utf-8")
+            df_err = pd.read_excel(file_err_ext, skiprows=2)
             
-            if not indices_validos:
-                st.warning(f"Las líneas indicadas no existen en el archivo {nombre_archivo}.")
-                continue
-                
-            df_delta = df_base.iloc[indices_validos].copy()
+            # Sacar los números de línea y ajustar al índice de Pandas (-2)
+            renglones = df_err["Línea"].dropna().astype(int).unique().tolist()
+            indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
             
-            modo_delta = st.radio(
-                f"⚙️ ¿Qué deseas hacer con las {len(indices_validos)} filas de {nombre_archivo}?", 
-                ["Descargar fragmento manual (Corregir en Excel)", "Cambiar en vivo en la consola"],
-                key=f"radio_{nombre_archivo}",
-                horizontal=True
-            )
-            
-            if modo_delta == "Descargar fragmento manual (Corregir en Excel)":
+            df_delta = df_base.iloc[indices].copy()
+            if not df_delta.empty:
                 csv_delta = df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8")
+                st.success("¡Filas encontradas!")
                 st.download_button(
-                    label="📥 Descargar pedacito con error (.csv)", 
+                    label="📥 Descargar Fragmento de Errores (.csv)", 
                     data=csv_delta, 
-                    file_name=f"Errores_{nombre_archivo}", 
+                    file_name=f"Errores_{file_base_ext.name}", 
                     type="secondary"
                 )
             else:
-                st.caption("Edita los datos directamente en la tabla y descarga el pedacito corregido.")
-                df_editado = st.data_editor(df_delta, key=f"ed_{nombre_archivo}", use_container_width=True)
-                csv_delta_ed = df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                st.download_button(
-                    label="📥 Descargar pedacito ya corregido (.csv)", 
-                    data=csv_delta_ed, 
-                    file_name=f"Corregidas_{nombre_archivo}", 
-                    type="primary"
-                )
+                st.warning("No se encontraron coincidencias de filas.")
 
     st.markdown("---")
+
+    # ---------------------------------------------------------
+    # PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL COMPLETITO
+    # ---------------------------------------------------------
+    st.subheader("💉 2. Inyectar y crear el Base Final Corregido")
+    st.markdown("Sube los **3 archivos obligatorios** para que el sistema abra la base original, busque los renglones del error y pegue tu archivo corregido (V1).")
     
-    # --- PASO 3: INYECTAR Y GENERAR BASE FINAL ---
-    st.subheader("3️⃣ Inyectar Correcciones al Archivo Original")
-    st.markdown("Sube el pedacito que corregiste (V1, V2...) en el Paso 2 para que el sistema lo inyecte en el archivo base y genere el CSV final completo para la Pestaña 3.")
+    col_in1, col_in2, col_in3 = st.columns(3)
+    with col_in1: file_base_iny = st.file_uploader("📁 1. Archivo Base Original (.csv)", type=["csv"], key="in_base")
+    with col_in2: file_err_iny = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="in_err")
+    with col_in3: file_v1_iny = st.file_uploader("📝 3. Pedacito Corregido V1 (.csv)", type=["csv"], key="in_v1")
     
-    col_f1, col_f2 = st.columns([2, 1])
-    with col_f1:
-        file_delta_corregido = st.file_uploader("📝 Sube el fragmento corregido (.csv)", type=["csv"], key="up_v")
-    with col_f2:
-        num_v = st.number_input("🔢 Versión de salida (Ej. 1 para V1):", min_value=1, value=1)
-    
-    if file_delta_corregido and dict_csvs_a_procesar and indices_error:
-        if st.button("🚀 Inyectar y Generar CSV Base Completo", type="primary"):
-            df_corregido = pd.read_csv(file_delta_corregido, encoding="utf-8")
-            
-            for nombre_archivo, df_base in dict_csvs_a_procesar.items():
-                indices_validos = [i for i in indices_error if 0 <= i < len(df_base)]
+    col_v = st.columns([1, 2])[0]
+    with col_v: num_v = st.number_input("Versión final (Ej. 1 para V1):", min_value=1, value=1)
+
+    if file_base_iny and file_err_iny and file_v1_iny:
+        if st.button("🚀 Ensamblar Archivo Final Completo", type="primary"):
+            try:
+                # Leer los 3 archivos
+                df_base = pd.read_csv(file_base_iny, encoding="utf-8")
+                df_err = pd.read_excel(file_err_iny, skiprows=2)
+                df_v1 = pd.read_csv(file_v1_iny, encoding="utf-8")
                 
-                # Validación de seguridad: el pedacito debe tener el mismo número de filas que los errores originales
-                if len(indices_validos) == len(df_corregido):
+                # Encontrar dónde van exactamente los parches
+                renglones = df_err["Línea"].dropna().astype(int).unique().tolist()
+                indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
+                
+                # Validación crítica de seguridad
+                if len(indices) == len(df_v1):
                     df_final = df_base.copy()
                     
-                    # Inyección ciega por número de renglón (mantiene el orden intacto)
-                    df_final.iloc[indices_validos] = df_corregido[df_final.columns].values
+                    # Copiar y pegar ciegamente en los renglones exactos
+                    df_final.iloc[indices] = df_v1[df_final.columns].values
                     
-                    out_name = f"{nombre_archivo.rsplit('.', 1)[0]}_V{num_v}.csv"
+                    out_name = f"{file_base_iny.name.rsplit('.', 1)[0]}_V{num_v}.csv"
                     csv_final = df_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
                     
-                    st.success("🎉 ¡CSV Final generado con éxito! Las correcciones se inyectaron perfectamente.")
+                    st.success("🎉 ¡CSV Base Completo y Corregido ensamblado con éxito! Ya puedes llevarlo a la Pestaña 3.")
                     st.download_button(
                         label=f"📁 📥 DESCARGAR {out_name}", 
                         data=csv_final, 
@@ -476,7 +443,10 @@ with tab_err:
                         use_container_width=True
                     )
                 else:
-                    st.error(f"❌ Desajuste: Seleccionaste {len(indices_validos)} filas de error, pero el archivo corregido que subiste tiene {len(df_corregido)}. Asegúrate de no borrar ni agregar renglones.")
+                    st.error(f"❌ Alerta de Desajuste: El reporte indica {len(indices)} renglones con error, pero tu pedacito corregido tiene {len(df_v1)} renglones. Deben ser exactamente la misma cantidad.")
+                    
+            except Exception as e:
+                st.error(f"Ocurrió un error al procesar: {str(e)}")
 
 # ============================================================
 # PESTAÑA 3: INYECCIÓN DE NRCS Y GENERACIÓN DE CLÚSTER
