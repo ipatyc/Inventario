@@ -516,15 +516,17 @@ with tab3:
                 filas_para_cluster_maestro = []
                 archivos_procesados_con_exito = 0
                 
+                # Listas para recolectar alertas y mostrarlas al final sin que desaparezcan
+                alertas_dimensiones = []
+                alertas_parejas = []
+                
                 with zipfile.ZipFile(excels_inyectados_zip, "w", zipfile.ZIP_DEFLATED) as zip_out:
                     for fx in files_xlsx_originales:
                         df_csv = None
                         fc_usado = None
                         
-                        # Obtener nombre base limpio del Excel
                         base_excel = simplificar_nombre(fx.name)
                         
-                        # Buscar su pareja en los CSVs cargados
                         for fc_cand in files_csv_finales:
                             base_csv = simplificar_nombre(fc_cand.name)
                             if base_excel == base_csv or base_excel in base_csv or base_csv in base_excel:
@@ -532,9 +534,7 @@ with tab3:
                                 fc_usado = fc_cand
                                 break
                         
-                        # Si encontramos su pareja, la procesamos
                         if df_csv is not None:
-                            st.info(f"🔄 Emparejando: `{fx.name}` 🤝 `{fc_usado.name}`")
                             wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
                             
                             if HOJA_ALTAS in wb.sheetnames:
@@ -544,12 +544,11 @@ with tab3:
                                 
                                 df_excel_original = pd.DataFrame(data[1:], columns=[str(c).strip() if c is not None else "" for c in data[0]])
                                 
-                                # Candado de control de dimensiones
+                                # 🔥 RECOLECTAR ERROR SI NO COINCIDEN LAS FILAS
                                 if len(df_excel_original) != len(df_csv):
-                                    st.error(f"❌ Mismatch: Excel `{fx.name}` ({len(df_excel_original)} filas) no coincide con CSV `{fc_usado.name}` ({len(df_csv)} filas).")
+                                    alertas_dimensiones.append(f"❌ Excel `{fx.name}` tiene **{len(df_excel_original)} filas**, pero el CSV `{fc_usado.name}` tiene **{len(df_csv)} filas**.")
                                     continue
                                 
-                                # --- RECONSTRUCCIÓN DE LAS 14 COLUMNAS DE EQUIVALENCIA (REGLAS DE R) ---
                                 df_nrc_pestana = pd.DataFrame({
                                     "PERIODO": df_csv["PERIODO"].values,
                                     "SEDE": df_csv["SEDE"].values,
@@ -567,7 +566,6 @@ with tab3:
                                     "SESION": df_csv["SESION"].values
                                 })
                                 
-                                # Llave para captura de CRN/NRC desde ARGOS
                                 llaves_cruce = (
                                     df_nrc_pestana["PERIODO"].apply(limpiar_clave_texto) + "_" + 
                                     df_excel_original["Nivel"].apply(normalizar_para_cruce) + "_" + 
@@ -578,16 +576,12 @@ with tab3:
                                 
                                 df_nrc_pestana.insert(0, "NRC", llaves_cruce.map(mapa_nrcs))
                                 
-                                # Clonación estructurada a la pestaña "NRC"
                                 if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
                                 ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
                                 ws_nrc.append(list(df_nrc_pestana.columns))
                                 for fila in df_nrc_pestana.values: 
                                     ws_nrc.append([None if pd.isna(v) else v for v in fila])
                                 
-                                # 🔥 FIX CLAVE: Generar nombre de salida único basado en el CSV para evitar sobrescritura
-                                nombre_salida_excel = fc_usado.name.lower().replace(".csv", ".xlsx").replace("_final", "_con_NRC")
-                                # Mantener mayúscula/minúscula limpia
                                 nombre_salida_excel = fc_usado.name.rsplit('.', 1)[0] + "_con_NRC.xlsx"
                                 
                                 excel_buffer = io.BytesIO()
@@ -595,7 +589,6 @@ with tab3:
                                 zip_out.writestr(nombre_salida_excel, excel_buffer.getvalue())
                                 archivos_procesados_con_exito += 1
                                 
-                                # --- RECOLECCIÓN PARA EL CLÚSTER MAESTRO ---
                                 for idx_row, row_ex in df_excel_original.iterrows():
                                     filas_para_cluster_maestro.append({
                                         "Periodo": row_ex.get("Periodo"),
@@ -603,9 +596,9 @@ with tab3:
                                         "datocomplementario": row_ex.get("Clúster")
                                     })
                         else:
-                            st.warning(f"⚠️ El archivo Excel `{fx.name}` no encontró ningún CSV compatible.")
+                            alertas_parejas.append(f"⚠️ `{fx.name}` no encontró ningún CSV compatible.")
 
-                    # 4. CREACIÓN DEL REPORTE DE CLÚSTER UNIFICADO (24 COLUMNAS)
+                    # 4. CREACIÓN DEL REPORTE DE CLÚSTER UNIFICADO
                     if filas_para_cluster_maestro:
                         df_parcial = pd.DataFrame(filas_para_cluster_maestro)
                         df_cluster_final = pd.DataFrame(index=df_parcial.index, columns=COLUMNAS_CLUSTER_FINAL)
@@ -617,17 +610,29 @@ with tab3:
                         csv_cluster_bytes = df_cluster_final.fillna("").to_csv(**CSV_KWARGS_R).encode("utf-8")
                         zip_out.writestr("cluster_unificado.csv", csv_cluster_bytes)
 
+                # --- IMPRESIÓN DE RESULTADOS Y ALERTAS FIJAS ---
                 if archivos_procesados_con_exito > 0:
                     st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
                     st.success(f"🎉 ¡Paquete final generado! Se procesaron {archivos_procesados_con_exito} archivos exitosamente.")
-                    st.rerun()
                 else:
-                    st.error("❌ No se pudo procesar ningún archivo. Valida las dimensiones de tus filas.")
+                    st.error("❌ No se pudo procesar ningún archivo al 100%. Revisa las alertas abajo.")
+                
+                # Mostrar los errores para que puedas leerlos con calma
+                if alertas_dimensiones:
+                    st.markdown("### 🚫 Archivos descartados por diferencia de filas:")
+                    for alerta in alertas_dimensiones:
+                        st.error(alerta)
+                
+                if alertas_parejas:
+                    st.markdown("### ❓ Archivos sin pareja:")
+                    for alerta in alertas_parejas:
+                        st.warning(alerta)
 
             except Exception as e:
                 st.error(f"❌ Ocurrió un inconveniente crítico: {str(e)}")
 
     if st.session_state.final_argos_zip is not None:
+        st.markdown("---")
         st.markdown("### 📥 Panel de Descarga")
         st.download_button(
             label="📁 📥 DESCARGAR PAQUETE FINAL (.ZIP)",
@@ -637,5 +642,5 @@ with tab3:
             use_container_width=True,
             type="primary"
         )
-
+        
 
