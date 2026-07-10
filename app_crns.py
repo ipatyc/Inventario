@@ -373,7 +373,8 @@ with tab_err:
     
     if file_base_ext and file_err_ext:
         if st.button("✂️ Descargar Fragmento"):
-            df_base = pd.read_csv(file_base_ext, encoding="utf-8")
+            # 🛡️ FIX: Leer todo como texto (dtype=str) para no borrar ceros ni chocar con formatos
+            df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
             df_err = pd.read_excel(file_err_ext, skiprows=2)
             
             renglones = df_err["Línea"].dropna().astype(int).unique().tolist()
@@ -397,25 +398,30 @@ with tab_err:
     st.markdown("Sube los 3 archivos para ensamblar el CSV **_final** limpio.")
     
     col_in1, col_in2, col_in3 = st.columns(3)
-    with col_in1: file_base_iny = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="in_base")
-    with col_in2: file_err_iny = st.file_uploader("📊 2. Reporte de Errores (.xlsx)", type=["xlsx"], key="in_err")
-    with col_in3: file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido (.csv)", type=["csv"], key="in_corr")
+    with col_in1: file_base_iny = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="in_base_2")
+    with col_in2: file_err_iny = st.file_uploader("📊 2. Reporte de Errores (.xlsx)", type=["xlsx"], key="in_err_2")
+    with col_in3: file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido (.csv)", type=["csv"], key="in_corr_2")
     
     if file_base_iny and file_err_iny and file_corr_iny:
         if st.button("🚀 Ensamblar Archivo Final", type="primary"):
             try:
-                df_base = pd.read_csv(file_base_iny, encoding="utf-8")
+                # 🛡️ FIX: Volvemos a leer Base y Fragmento estrictamente como texto
+                df_base = pd.read_csv(file_base_iny, encoding="utf-8", dtype=str)
                 df_err = pd.read_excel(file_err_iny, skiprows=2)
-                df_corr = pd.read_csv(file_corr_iny, encoding="utf-8")
+                df_corr = pd.read_csv(file_corr_iny, encoding="utf-8", dtype=str)
                 
                 renglones = df_err["Línea"].dropna().astype(int).unique().tolist()
                 indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
                 
                 if len(indices) == len(df_corr):
                     df_final = df_base.copy()
-                    df_final.iloc[indices] = df_corr[df_final.columns].values
                     
-                    # Nombre final limpio sin letras de versión
+                    # 🛡️ FIX: Inyección quirúrgica columna por columna para evadir el error de 'dtype'
+                    for col in df_final.columns:
+                        if col in df_corr.columns:
+                            df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
+                    
+                    # Limpiamos el nombre para que no se apilen los sufijos
                     base_name = file_base_iny.name.rsplit('.', 1)[0]
                     out_name = f"{base_name.replace('_base', '').replace('_final', '')}_final.csv"
                     
