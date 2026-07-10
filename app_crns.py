@@ -367,9 +367,10 @@ with tab_err:
     # --- PASO 1: EXTRAER O EDITAR EL PEDACITO CON ERROR ---
     st.subheader("✂️ 1. Extraer o corregir el pedacito con errores")
     
-    col_ex1, col_ex2 = st.columns(2)
+    col_ex1, col_ex2, col_ex3 = st.columns(3)
     with col_ex1: file_base_ext = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="ex_base")
     with col_ex2: file_err_ext = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ex_err")
+    with col_ex3: num_v_ext = st.number_input("🔢 Versión de corrección (Ej. 1 para V1):", min_value=1, value=1, key="v_ext")
     
     if file_base_ext and file_err_ext:
         # Leer todo como texto (dtype=str)
@@ -381,6 +382,7 @@ with tab_err:
         
         if indices:
             df_delta = df_base.iloc[indices].copy()
+            base_name_ext = file_base_ext.name.rsplit('.', 1)[0] # Nombre limpio sin la extensión
             
             # 🔥 LAS 3 OPCIONES DE EXTRACCIÓN
             modo_delta = st.radio(
@@ -395,14 +397,14 @@ with tab_err:
                 st.download_button(
                     "📥 Descargar Fragmento en Excel", 
                     data=excel_buffer.getvalue(), 
-                    file_name=f"Errores_{file_base_ext.name.rsplit('.', 1)[0]}.xlsx", 
+                    file_name=f"Errores_{base_name_ext}_V{num_v_ext}.xlsx", 
                     type="secondary"
                 )
             elif modo_delta == "Descargar en formato CSV (.csv)":
                 st.download_button(
                     "📥 Descargar Fragmento en CSV", 
                     data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
-                    file_name=f"Errores_{file_base_ext.name}", 
+                    file_name=f"Errores_{base_name_ext}_V{num_v_ext}.csv", 
                     type="secondary"
                 )
             else:
@@ -411,7 +413,7 @@ with tab_err:
                 st.download_button(
                     "📥 Descargar Fragmento Corregido (.csv)", 
                     data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
-                    file_name=f"Corregidas_{file_base_ext.name}", 
+                    file_name=f"Corregidas_{base_name_ext}_V{num_v_ext}.csv", 
                     type="primary"
                 )
         else:
@@ -452,8 +454,8 @@ with tab_err:
                         if col in df_corr.columns:
                             df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
                     
-                    base_name = file_base_iny.name.rsplit('.', 1)[0]
-                    out_name = f"{base_name.replace('_base', '').replace('_final', '')}_final.csv"
+                    base_name_iny = file_base_iny.name.rsplit('.', 1)[0]
+                    out_name = f"{base_name_iny.replace('_base', '').replace('_final', '')}_final.csv"
                     
                     st.success("🎉 ¡Archivo Final listo!")
                     st.download_button(
@@ -467,6 +469,8 @@ with tab_err:
                     st.error(f"❌ Desajuste: Tienes {len(indices)} errores, pero el archivo corregido tiene {len(df_corr)} filas.")
             except Exception as e:
                 st.error(f"Error: {str(e)}")
+
+
 # ============================================================
 # PESTAÑA 3: INYECCIÓN DE NRCS Y GENERACIÓN DE CLÚSTER
 # ============================================================
