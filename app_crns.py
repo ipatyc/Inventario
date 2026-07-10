@@ -504,37 +504,37 @@ with tab3:
                 argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
                 mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
 
-                # 2. ORDENAR LISTAS ALFABÉTICAMENTE PARA COINCIDENCIA CRUCIAL
-                lista_csvs = sorted(files_csv_finales, key=lambda x: x.name)
-                lista_excels = sorted(files_xlsx_originales, key=lambda x: x.name)
-                
+                # 2. FUNCIÓN DE LIMPIEZA PARA EMPAREJAMIENTO ROBUSTO
+                def simplificar_nombre(nombre):
+                    n = nombre.lower()
+                    for basura in ['.xlsx', '.xls', '.csv', '_final', '_base', '_v1', '_v2', '_v3', '_v4', 'corregidas_', 'errores_']:
+                        n = n.replace(basura, '')
+                    return n.strip().replace(" ", "")
+
+                # 3. PROCESAMIENTO MATRICIAL
                 excels_inyectados_zip = io.BytesIO()
                 filas_para_cluster_maestro = []
                 archivos_procesados_con_exito = 0
                 
-                # 3. PROCESAMIENTO MATRICIAL DE LOS PARES DE ARCHIVOS
                 with zipfile.ZipFile(excels_inyectados_zip, "w", zipfile.ZIP_DEFLATED) as zip_out:
-                    for i in range(len(lista_excels)):
-                        fx = lista_excels[i]
+                    for fx in files_xlsx_originales:
                         df_csv = None
                         fc_usado = None
                         
-                        # Estrategia A: Emparejamiento inteligente por aproximación de nombre
-                        nombre_ex_clean = fx.name.lower().replace(".xlsx", "").replace("_base", "").replace(" ", "")
-                        for fc_cand in lista_csvs:  # <--- EL FIX ESTÁ AQUÍ ("in" en lugar de "en")
-                            nombre_csv_clean = fc_cand.name.lower().replace(".csv", "").replace("_final", "").replace(" ", "")
-                            if nombre_ex_clean in nombre_csv_clean or nombre_csv_clean in nombre_ex_clean:
+                        # Obtener nombre base limpio del Excel
+                        base_excel = simplificar_nombre(fx.name)
+                        
+                        # Buscar su pareja en los CSVs cargados
+                        for fc_cand in files_csv_finales:
+                            base_csv = simplificar_nombre(fc_cand.name)
+                            if base_excel == base_csv or base_excel in base_csv or base_csv in base_excel:
                                 df_csv = pd.read_csv(io.BytesIO(fc_cand.getvalue()), encoding="utf-8", dtype=str)
                                 fc_usado = fc_cand
                                 break
                         
-                        # Estrategia B: Fallback por orden de posición física si la estrategia A no dio fruto
-                        if df_csv is None and i < len(lista_csvs):
-                            fc_usado = lista_csvs[i]
-                            df_csv = pd.read_csv(io.BytesIO(fc_usado.getvalue()), encoding="utf-8", dtype=str)
-                        
-                        # Si encontramos un CSV de soporte, procedemos con la inyección
+                        # Si encontramos su pareja, la procesamos
                         if df_csv is not None:
+                            st.info(f"🔄 Emparejando: `{fx.name}` 🤝 `{fc_usado.name}`")
                             wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
                             
                             if HOJA_ALTAS in wb.sheetnames:
@@ -544,12 +544,12 @@ with tab3:
                                 
                                 df_excel_original = pd.DataFrame(data[1:], columns=[str(c).strip() if c is not None else "" for c in data[0]])
                                 
-                                # 🛡️ CANDADO DE SEGURIDAD ABSOLUTO: Evita el 'index out of bounds'
+                                # Candado de control de dimensiones
                                 if len(df_excel_original) != len(df_csv):
-                                    st.error(f"❌ Mismatch detectado: Excel `{fx.name}` ({len(df_excel_original)} filas) no coincide en tamaño con CSV `{fc_usado.name}` ({len(df_csv)} filas). Saltando archivo.")
+                                    st.error(f"❌ Mismatch: Excel `{fx.name}` ({len(df_excel_original)} filas) no coincide con CSV `{fc_usado.name}` ({len(df_csv)} filas).")
                                     continue
                                 
-                                # --- ENSAMBLAJE DE LAS 14 COLUMNAS DE EQUIVALENCIA (REGLAS DE R) ---
+                                # --- RECONSTRUCCIÓN DE LAS 14 COLUMNAS DE EQUIVALENCIA (REGLAS DE R) ---
                                 df_nrc_pestana = pd.DataFrame({
                                     "PERIODO": df_csv["PERIODO"].values,
                                     "SEDE": df_csv["SEDE"].values,
@@ -567,7 +567,7 @@ with tab3:
                                     "SESION": df_csv["SESION"].values
                                 })
                                 
-                                # Construcción de la llave para la captura del NRC de ARGOS
+                                # Llave para captura de CRN/NRC desde ARGOS
                                 llaves_cruce = (
                                     df_nrc_pestana["PERIODO"].apply(limpiar_clave_texto) + "_" + 
                                     df_excel_original["Nivel"].apply(normalizar_para_cruce) + "_" + 
@@ -576,23 +576,26 @@ with tab3:
                                     df_nrc_pestana["SECCION"].apply(str).apply(limpia_seccion_interna)
                                 )
                                 
-                                # Insertar columna NRC al inicio de la matriz
                                 df_nrc_pestana.insert(0, "NRC", llaves_cruce.map(mapa_nrcs))
                                 
-                                # Sobreescribir o clonar la hoja destino
+                                # Clonación estructurada a la pestaña "NRC"
                                 if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
                                 ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
                                 ws_nrc.append(list(df_nrc_pestana.columns))
                                 for fila in df_nrc_pestana.values: 
                                     ws_nrc.append([None if pd.isna(v) else v for v in fila])
                                 
-                                # Empacar el Excel modificado al repositorio ZIP
+                                # 🔥 FIX CLAVE: Generar nombre de salida único basado en el CSV para evitar sobrescritura
+                                nombre_salida_excel = fc_usado.name.lower().replace(".csv", ".xlsx").replace("_final", "_con_NRC")
+                                # Mantener mayúscula/minúscula limpia
+                                nombre_salida_excel = fc_usado.name.rsplit('.', 1)[0] + "_con_NRC.xlsx"
+                                
                                 excel_buffer = io.BytesIO()
                                 wb.save(excel_buffer)
-                                zip_out.writestr(fx.name, excel_buffer.getvalue())
+                                zip_out.writestr(nombre_salida_excel, excel_buffer.getvalue())
                                 archivos_procesados_con_exito += 1
                                 
-                                # --- RECOLECCIÓN INTEGRAL PARA EL CLÚSTER MAESTRO ---
+                                # --- RECOLECCIÓN PARA EL CLÚSTER MAESTRO ---
                                 for idx_row, row_ex in df_excel_original.iterrows():
                                     filas_para_cluster_maestro.append({
                                         "Periodo": row_ex.get("Periodo"),
@@ -602,7 +605,7 @@ with tab3:
                         else:
                             st.warning(f"⚠️ El archivo Excel `{fx.name}` no encontró ningún CSV compatible.")
 
-                    # 4. CREACIÓN DEL ARCHIVO CONSOLIDADO DE CLÚSTER (24 COLUMNAS)
+                    # 4. CREACIÓN DEL REPORTE DE CLÚSTER UNIFICADO (24 COLUMNAS)
                     if filas_para_cluster_maestro:
                         df_parcial = pd.DataFrame(filas_para_cluster_maestro)
                         df_cluster_final = pd.DataFrame(index=df_parcial.index, columns=COLUMNAS_CLUSTER_FINAL)
@@ -616,10 +619,10 @@ with tab3:
 
                 if archivos_procesados_con_exito > 0:
                     st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
-                    st.success(f"🎉 ¡Proceso finalizado! Se procesaron {archivos_procesados_con_exito} archivos exitosamente.")
+                    st.success(f"🎉 ¡Paquete final generado! Se procesaron {archivos_procesados_con_exito} archivos exitosamente.")
                     st.rerun()
                 else:
-                    st.error("❌ No se pudo empaquetar ningún archivo. Revisa que las dimensiones de filas coincidan entre tus CSVs y Excels.")
+                    st.error("❌ No se pudo procesar ningún archivo. Valida las dimensiones de tus filas.")
 
             except Exception as e:
                 st.error(f"❌ Ocurrió un inconveniente crítico: {str(e)}")
