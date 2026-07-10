@@ -559,27 +559,18 @@ with tab3:
                                     alertas_dimensiones.append(f"❌ Excel `{fx.name}` tiene **{len(df_excel_original)} filas de datos**, pero el CSV `{fc_usado.name}` tiene **{len(df_csv)} filas de datos**.")
                                     continue
                                 
-                                # 🔥 EL CAMBIO ESTÁ AQUÍ 🔥
-                                # 1. Clonamos la pestaña de Excel original (con tooooodas sus columnas)
+                                # Clonamos la pestaña de Excel original (con todas sus columnas)
                                 df_nrc_pestana = df_excel_original.copy()
                                 
-                                # 2. Diccionario de equivalencias para reescribir solo lo que arreglamos
+                                # Diccionario de equivalencias para reescribir solo lo que arreglamos
                                 mapeo_columnas = {
-                                    "Periodo": "PERIODO",
-                                    "Campus": "SEDE",
-                                    "Subject": "SUBJ",
-                                    "Course": "COURSE",
-                                    "Parte de Periodo": "PARTEPERIODO",
-                                    "Estatus": "STATUS",
-                                    "Capacidad": "CAPACIDAD",
-                                    "Sección": "SECCION",
-                                    "Tipo de Horario": "TIPODEHORARIO",
-                                    "Método Educativo": "METODO_EDUCATIVO",
-                                    "Modo de Calificar": "MODODECALIFICAR",
-                                    "Sesion": "SESION"
+                                    "Periodo": "PERIODO", "Campus": "SEDE", "Subject": "SUBJ", "Course": "COURSE",
+                                    "Parte de Periodo": "PARTEPERIODO", "Estatus": "STATUS", "Capacidad": "CAPACIDAD",
+                                    "Sección": "SECCION", "Tipo de Horario": "TIPODEHORARIO", "Método Educativo": "METODO_EDUCATIVO",
+                                    "Modo de Calificar": "MODODECALIFICAR", "Sesion": "SESION"
                                 }
                                 
-                                # 3. Inyección quirúrgica (reemplazamos en el clon los datos corregidos del CSV)
+                                # Inyección quirúrgica
                                 for col_ex, col_cs in mapeo_columnas.items():
                                     if col_ex in df_nrc_pestana.columns and col_cs in df_csv.columns:
                                         if col_ex == "Sección":
@@ -587,11 +578,10 @@ with tab3:
                                         else:
                                             df_nrc_pestana[col_ex] = df_csv[col_cs].values
                                 
-                                # Agregamos las dos condiciones forzadas que venían en tu R
                                 df_nrc_pestana["Grupos"] = "1"
                                 df_nrc_pestana["Socio de Integración"] = "D2L"
                                 
-                                # 4. Calculamos y traemos el NRC de ARGOS
+                                # Calculamos y traemos el NRC de ARGOS
                                 llaves_cruce = (
                                     df_nrc_pestana["Periodo"].apply(limpiar_clave_texto) + "_" + 
                                     df_excel_original["Nivel"].apply(normalizar_para_cruce) + "_" + 
@@ -600,7 +590,7 @@ with tab3:
                                     df_nrc_pestana["Sección"].apply(str).apply(limpia_seccion_interna)
                                 )
                                 
-                                # Insertamos el NRC en la posición 0 (hasta la izquierda)
+                                # Insertamos el NRC en la posición 0 (columna A)
                                 df_nrc_pestana.insert(0, "NRC", llaves_cruce.map(mapa_nrcs))
                                 
                                 # Guardamos la pestaña ensamblada en el Excel
@@ -610,6 +600,47 @@ with tab3:
                                 for fila in df_nrc_pestana.values: 
                                     ws_nrc.append([None if pd.isna(v) else v for v in fila])
                                 
+                                # ===================================================
+                                # ✨ DISEÑO DE FORMATO PROFESIONAL (ESTRICTO) ✨
+                                # ===================================================
+                                # 1. Definición de la paleta de colores y fuentes (Calibri 11)
+                                font_base = Font(name="Calibri", size=11, bold=False)
+                                font_nrc = Font(name="Calibri", size=11, bold=True)
+                                font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+                                
+                                fill_header = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # Azul Rey corporativo
+                                fill_nrc = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")     # Azul Claro sutil
+                                
+                                align_header = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                                align_center = Alignment(horizontal="center", vertical="center")
+                                
+                                # Aplicar fuente base general a toda la cuadrícula activa
+                                for row in ws_nrc.iter_rows(min_row=1, max_row=ws_nrc.max_row, min_col=1, max_col=ws_nrc.max_column):
+                                    for cell in row:
+                                        cell.font = font_base
+                                
+                                # Aplicar formato al encabezado (Fila 1)
+                                for cell in ws_nrc[1]:
+                                    cell.font = font_header
+                                    cell.fill = fill_header
+                                    cell.alignment = align_header
+                                
+                                # Aplicar formato destacado a la columna NRC (Columna A, omitiendo la celda del título)
+                                for cell in ws_nrc['A'][1:]:
+                                    cell.font = font_nrc
+                                    cell.fill = fill_nrc
+                                    cell.alignment = align_center
+                                
+                                # 2. Auto-ajuste inteligente del ancho de las columnas
+                                for col in ws_nrc.columns:
+                                    max_len = 0
+                                    col_letter = col[0].column_letter
+                                    for cell in col:
+                                        if cell.value is not None:
+                                            max_len = max(max_len, len(str(cell.value)))
+                                    ws_nrc.column_dimensions[col_letter].width = max(max_len + 3, 11)
+                                # ===================================================
+                                
                                 nombre_salida_excel = fc_usado.name.rsplit('.', 1)[0] + "_con_NRC.xlsx"
                                 
                                 excel_buffer = io.BytesIO()
@@ -617,7 +648,6 @@ with tab3:
                                 zip_out.writestr(nombre_salida_excel, excel_buffer.getvalue())
                                 archivos_procesados_con_exito += 1
                                 
-                                # Recolección para Clúster
                                 for idx_row, row_ex in df_excel_original.iterrows():
                                     filas_para_cluster_maestro.append({
                                         "Periodo": row_ex.get("Periodo"),
@@ -647,14 +677,12 @@ with tab3:
                     st.error("❌ No se pudo procesar ningún archivo.")
                 
                 if alertas_dimensiones:
-                    st.markdown("### 🚫 Archivos descartados por diferencia de filas (ya descontando filas fantasmas):")
-                    for alerta in alertas_dimensiones:
-                        st.error(alerta)
+                    st.markdown("### 🚫 Archivos descartados por diferencia de filas:")
+                    for alerta in alertas_dimensiones: st.error(alerta)
                 
                 if alertas_parejas:
                     st.markdown("### ❓ Archivos sin pareja:")
-                    for alerta in alertas_parejas:
-                        st.warning(alerta)
+                    for alerta in alertas_parejas: st.warning(alerta)
 
             except Exception as e:
                 st.error(f"❌ Ocurrió un inconveniente crítico: {str(e)}")
