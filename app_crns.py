@@ -321,7 +321,7 @@ with tab1:
                     resultado_df["STATUS"] = sub["Estatus"].apply(format_r_string)
                     
                     resultado_df["CAPACIDAD"] = pd.to_numeric(sub["Capacidad"], errors='coerce').astype('Int64')
-                    resultado_df["GRUPOS"] = pd.to_numeric(1, errors='ignore').astype('Int64')
+                    resultado_df["GRUPOS"] = pd.Series(1, index=resultado_df.index, dtype="Int64")
                     resultado_df["SECCION"] = pd.to_numeric(sub["Sección"], errors='coerce').astype('Int64')
                     
                     resultado_df["TIPODEHORARIO"] = sub["Tipo de Horario"].apply(format_r_string)
