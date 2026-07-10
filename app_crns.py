@@ -337,8 +337,22 @@ with tab1:
                     ]
                     resultado_df = resultado_df[columnas_ordenadas]
                     
+                    # 🔥 HIGIENE PROFESIONAL ANTI-COMILLAS Y ANTI-ESPACIOS PARA BANNER 🔥
+                    for col in resultado_df.columns:
+                        resultado_df[col] = resultado_df[col].astype(str).str.replace('"', '', regex=False).str.strip()
+                        resultado_df[col] = resultado_df[col].replace(['nan', 'None', '<NA>', 'NaN'], '')
+                    
                     csv_filename = f"{name.rsplit('.', 1)[0] if '.' in name else name}.csv"
-                    csv_string = resultado_df.to_csv(**CSV_KWARGS_R)
+                    
+                    # 🔥 CONFIGURACIÓN DE SALIDA DE ALTA SEGURIDAD PARA ORACLE BANNER
+                    # Eliminamos el index (evita desfasar columnas) y forzamos lineterminator puro '\n'
+                    kwargs_p1_estricto = {
+                        'index': False, 
+                        'encoding': 'utf-8', 
+                        'sep': ',', 
+                        'lineterminator': '\n'
+                    }
+                    csv_string = resultado_df.to_csv(**kwargs_p1_estricto)
                     
                     zip_file.writestr(csv_filename, csv_string.encode('utf-8'))
                     st.session_state.csv_files_to_download[csv_filename] = csv_string.encode('utf-8')
@@ -357,7 +371,7 @@ with tab1:
                 use_container_width=True, 
                 type="primary"
             )
-
+            
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
