@@ -226,132 +226,75 @@ with tab_err:
 # ============================================================
 with tab_err:
     st.header("⚠️ Reporte de Errores y Ensamblaje Final")
-    st.markdown("Extrae filas con error, corrígelas y genera el archivo **_final** para la Pestaña 3.")
+    st.markdown("Extrae filas con error, corrígelas y genera el archivo para la Pestaña 3.")
     
     # --- PASO 1: EXTRAER O EDITAR EL PEDACITO CON ERROR ---
     st.subheader("✂️ 1. Extraer o corregir el pedacito con errores")
     
     col_ex1, col_ex2, col_ex3 = st.columns(3)
-    with col_ex1: file_base_ext = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="ex_base")
-    with col_ex2: file_err_ext = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ex_err")
-    with col_ex3: num_v_ext = st.number_input("🔢 Versión de corrección (Ej. 1 para V1):", min_value=1, value=1, key="v_ext")
+    with col_ex1: file_base_ext = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="ext_base_1")
+    with col_ex2: file_err_ext = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ext_err_1")
+    with col_ex3: sufijo_version = st.text_input("🔢 Sufijo de versión (Ej: V1, V2):", value="V1", key="suf_v1")
     
     if file_base_ext and file_err_ext:
-        # Leer como texto puro para no alterar tus datos
         df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
-        df_err = pd.read_excel(file_err_ext, skiprows=2)
-        
-        # Filtramos exactamente las líneas que dice el Excel
-        df_err = df_err.dropna(subset=["Línea"])
-        renglones = df_err["Línea"].astype(int).unique().tolist()
-        indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
+        df_err = pd.read_excel(file_err_ext, skiprows=2).dropna(subset=["Línea"])
+        indices = [r - 2 for r in df_err["Línea"].astype(int).unique().tolist() if 0 <= (r - 2) < len(df_base)]
         
         if indices:
-            # Copiamos la base y nos quedamos SOLO con los renglones del error
             df_delta = df_base.iloc[indices].copy()
+            base_name_ext = file_base_ext.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
+            nombre_archivo = f"{base_name_ext}_{sufijo_version}"
             
-            # 🔥 HIGIENE ESTRICTA BANNER 🔥
-            for col in df_delta.columns:
-                df_delta[col] = df_delta[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
+            modo_delta = st.radio("⚙️ ¿Cómo deseas descargar?", ["Excel (.xlsx)", "CSV (.csv)", "Editar en vivo"], horizontal=True, key="modo_1")
             
-            base_name_ext = file_base_ext.name.rsplit('.', 1)[0]
-            
-            modo_delta = st.radio(
-                "⚙️ ¿Cómo deseas corregir las filas con error?", 
-                ["Descargar en Excel (.xlsx)", "Descargar en formato CSV (.csv)", "Editar en vivo en la consola"],
-                horizontal=True
-            )
-            
-            if modo_delta == "Descargar en Excel (.xlsx)":
-                excel_buffer = io.BytesIO()
-                df_delta.to_excel(excel_buffer, index=False)
-                st.download_button(
-                    "📥 Descargar Fragmento en Excel", 
-                    data=excel_buffer.getvalue(), 
-                    file_name=f"Errores_{base_name_ext}_V{num_v_ext}.xlsx", 
-                    type="secondary"
-                )
-            elif modo_delta == "Descargar en formato CSV (.csv)":
-                st.download_button(
-                    "📥 Descargar Fragmento en CSV", 
-                    data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
-                    file_name=f"Errores_{base_name_ext}_V{num_v_ext}.csv", 
-                    type="secondary"
-                )
+            if modo_delta == "Excel (.xlsx)":
+                buf = io.BytesIO()
+                df_delta.to_excel(buf, index=False)
+                st.download_button("📥 Descargar Fragmento", data=buf.getvalue(), file_name=f"{nombre_archivo}.xlsx")
+            elif modo_delta == "CSV (.csv)":
+                st.download_button("📥 Descargar Fragmento", data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv")
             else:
-                st.caption("Edita los datos directamente en la tabla y descarga el pedacito ya corregido.")
-                df_editado = st.data_editor(df_delta, key="ed_vivo", use_container_width=True)
-                
-                # 🔥 HIGIENE ESTRICTA BANNER 🔥
-                df_editado_clean = df_editado.copy()
-                for col in df_editado_clean.columns:
-                    df_editado_clean[col] = df_editado_clean[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
-                
-                st.download_button(
-                    "📥 Descargar Fragmento Corregido (.csv)", 
-                    data=df_editado_clean.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
-                    file_name=f"Corregidas_{base_name_ext}_V{num_v_ext}.csv", 
-                    type="primary"
-                )
-        else:
-            st.warning("No se encontraron coincidencias de filas.")
+                df_editado = st.data_editor(df_delta, key="ed_vivo_1", use_container_width=True)
+                st.download_button("📥 Descargar Corregido", data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary")
 
     st.markdown("---")
     
     # --- PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL ---
     st.subheader("💉 2. Inyectar correcciones y generar Archivo Final")
-    st.markdown("Sube los 3 archivos para ensamblar el CSV **_final** limpio.")
     
     col_in1, col_in2, col_in3 = st.columns(3)
-    with col_in1: file_base_iny = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="in_base_2")
-    with col_in2: file_err_iny = st.file_uploader("📊 2. Reporte de Errores (.xlsx)", type=["xlsx"], key="in_err_2")
-    with col_in3: file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido", type=["csv", "xlsx"], key="in_corr_2")
+    with col_in1: file_base_iny = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="iny_base_2")
+    with col_in2: file_err_iny = st.file_uploader("📊 2. Reporte de Errores (.xlsx)", type=["xlsx"], key="iny_err_2")
+    with col_in3: 
+        file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido", type=["csv", "xlsx"], key="iny_corr_2")
+        tipo_final = st.text_input("Etiqueta final (V1, V2, final):", value="final", key="suf_v2")
     
     if file_base_iny and file_err_iny and file_corr_iny:
         if st.button("🚀 Ensamblar Archivo Final", type="primary"):
             try:
                 df_base = pd.read_csv(file_base_iny, encoding="utf-8", dtype=str)
-                df_err = pd.read_excel(file_err_iny, skiprows=2)
+                df_err = pd.read_excel(file_err_iny, skiprows=2).dropna(subset=["Línea"])
+                df_corr = pd.read_excel(file_corr_iny, dtype=str) if file_corr_iny.name.endswith('.xlsx') else pd.read_csv(file_corr_iny, encoding="utf-8", dtype=str)
                 
-                # Leemos tu parche (ya sea excel o csv)
-                if file_corr_iny.name.lower().endswith('.xlsx'):
-                    df_corr = pd.read_excel(file_corr_iny, dtype=str)
-                else:
-                    df_corr = pd.read_csv(file_corr_iny, encoding="utf-8", dtype=str)
-                
-                df_err = df_err.dropna(subset=["Línea"])
-                renglones = df_err["Línea"].astype(int).unique().tolist()
-                indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
+                indices = [r - 2 for r in df_err["Línea"].astype(int).unique().tolist() if 0 <= (r - 2) < len(df_base)]
                 
                 if len(indices) == len(df_corr):
                     df_final = df_base.copy()
-                    
-                    # 🔥 HIGIENE ESTRICTA BANNER 🔥
-                    for col in df_corr.columns:
-                        df_corr[col] = df_corr[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
-                    
-                    # Inyección exacta de los datos
                     for col in df_final.columns:
-                        if col in df_corr.columns:
-                            df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
+                        if col in df_corr.columns: df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
                     
-                    # 🔥 HIGIENE ESTRICTA BANNER 🔥
+                    # Limpieza final para Banner antes de exportar
                     for col in df_final.columns:
                         df_final[col] = df_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
                     
-                    base_name_iny = file_base_iny.name.rsplit('.', 1)[0]
-                    out_name = f"{base_name_iny.replace('_base', '').replace('_final', '')}_final.csv"
+                    base_name_iny = file_base_iny.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
+                    out_name = f"{base_name_iny}_{tipo_final}.csv"
                     
-                    st.success("🎉 ¡Archivo Final listo y limpio!")
-                    st.download_button(
-                        label=f"📁 📥 DESCARGAR {out_name}", 
-                        data=df_final.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
-                        file_name=out_name, 
-                        type="primary",
-                        use_container_width=True
-                    )
+                    st.success(f"🎉 ¡Archivo {out_name} listo!")
+                    st.download_button(label=f"📁 📥 DESCARGAR {out_name}", data=df_final.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=out_name, type="primary", use_container_width=True)
                 else:
-                    st.error(f"❌ Desajuste: Tienes {len(indices)} errores, pero el archivo corregido tiene {len(df_corr)} filas.")
+                    st.error(f"❌ Desajuste: {len(indices)} errores detectados vs {len(df_corr)} filas en el parche.")
             except Exception as e:
                 st.error(f"Error: {str(e)}")
                 
