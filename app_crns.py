@@ -374,20 +374,23 @@ with tab_err:
     with col_ex3: num_v_ext = st.number_input("🔢 Versión de corrección (Ej. 1 para V1):", min_value=1, value=1, key="v_ext")
     
     if file_base_ext and file_err_ext:
-        # Leer todo como texto (dtype=str) para proteger claves y ceros a la izquierda
+        # Leer como texto puro para no alterar tus datos
         df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
         df_err = pd.read_excel(file_err_ext, skiprows=2)
         
-        # Eliminar renglones vacíos del reporte de errores
+        # Filtramos exactamente las líneas que dice el Excel
         df_err = df_err.dropna(subset=["Línea"])
         renglones = df_err["Línea"].astype(int).unique().tolist()
         indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
         
         if indices:
+            # Copiamos la base y nos quedamos SOLO con los renglones del error
             df_delta = df_base.iloc[indices].copy()
             
-            # Limpiar filas fantasmas del fragmento antes de mostrarlo o descargarlo
-            df_delta = df_delta.dropna(how='all').reset_index(drop=True)
+            # Limpiamos espacios basura a los lados para evitar que Banner llore con el "buffer too small"
+            for col in df_delta.columns:
+                df_delta[col] = df_delta[col].astype(str).str.strip().replace(['nan', 'None', '<NA>'], '')
+            
             base_name_ext = file_base_ext.name.rsplit('.', 1)[0]
             
             modo_delta = st.radio(
@@ -396,9 +399,8 @@ with tab_err:
                 horizontal=True
             )
             
-            # Forzar de forma segura que no se exporten índices numéricos de fila
-            kwargs_exportacion = CSV_KWARGS_R.copy()
-            kwargs_exportacion['index'] = False
+            # Parámetros estrictos para exportar un CSV idéntico al original, sin índices
+            csv_kwargs = {'index': False, 'encoding': 'utf-8'}
             
             if modo_delta == "Descargar en Excel (.xlsx)":
                 excel_buffer = io.BytesIO()
@@ -412,25 +414,21 @@ with tab_err:
             elif modo_delta == "Descargar en formato CSV (.csv)":
                 st.download_button(
                     "📥 Descargar Fragmento en CSV", 
-                    data=df_delta.to_csv(**kwargs_exportacion).encode("utf-8"), 
+                    data=df_delta.to_csv(**csv_kwargs).encode("utf-8"), 
                     file_name=f"Errores_{base_name_ext}_V{num_v_ext}.csv", 
                     type="secondary"
                 )
             else:
                 st.caption("Edita los datos directamente en la tabla y descarga el pedacito ya corregido.")
                 df_editado = st.data_editor(df_delta, key="ed_vivo", use_container_width=True)
-                
-                # Exorcismo de filas vacías que el usuario pueda dejar por accidente en la edición en vivo
-                df_editado_limpio = df_editado.dropna(how='all').reset_index(drop=True)
-                
                 st.download_button(
                     "📥 Descargar Fragmento Corregido (.csv)", 
-                    data=df_editado_limpio.to_csv(**kwargs_exportacion).encode("utf-8"), 
+                    data=df_editado.to_csv(**csv_kwargs).encode("utf-8"), 
                     file_name=f"Corregidas_{base_name_ext}_V{num_v_ext}.csv", 
                     type="primary"
                 )
         else:
-            st.warning("No se encontraron coincidencias de filas válidas.")
+            st.warning("No se encontraron coincidencias de filas.")
 
     st.markdown("---")
     
@@ -449,52 +447,50 @@ with tab_err:
                 df_base = pd.read_csv(file_base_iny, encoding="utf-8", dtype=str)
                 df_err = pd.read_excel(file_err_iny, skiprows=2)
                 
-                # Cargar el fragmento corregido según su extensión
+                # Leemos tu parche (ya sea excel o csv)
                 if file_corr_iny.name.lower().endswith('.xlsx'):
                     df_corr = pd.read_excel(file_corr_iny, dtype=str)
                 else:
                     df_corr = pd.read_csv(file_corr_iny, encoding="utf-8", dtype=str)
                 
-                # Remover de raíz filas fantasma de todas las fuentes
-                df_base = df_base.dropna(how='all').reset_index(drop=True)
-                df_corr = df_corr.dropna(how='all').reset_index(drop=True)
                 df_err = df_err.dropna(subset=["Línea"])
-                
-                # Limpieza cosmética de strings: quitar comillas accidentales y espacios en blanco
-                for col in df_corr.columns:
-                    df_corr[col] = df_corr[col].astype(str).str.replace('"', '', regex=False).str.strip()
-                    df_corr[col] = df_corr[col].replace('nan', '')
-                
                 renglones = df_err["Línea"].astype(int).unique().tolist()
                 indices = [r - 2 for r in renglones if 0 <= (r - 2) < len(df_base)]
                 
                 if len(indices) == len(df_corr):
                     df_final = df_base.copy()
                     
-                    # Inyección quirúrgica sin alterar índices ni estructuras originales
+                    # Limpiamos comillas y espacios del parche antes de inyectar
+                    for col in df_corr.columns:
+                        df_corr[col] = df_corr[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>'], '')
+                    
+                    # Inyección exacta de los datos
                     for col in df_final.columns:
                         if col in df_corr.columns:
                             df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
                     
-                    base_name_iny = file_base_iny_clean = file_base_iny.name.rsplit('.', 1)[0]
+                    # Última pasada a toda la base para asegurar que Banner no trunque nada
+                    for col in df_final.columns:
+                        df_final[col] = df_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>'], '')
+                    
+                    base_name_iny = file_base_iny.name.rsplit('.', 1)[0]
                     out_name = f"{base_name_iny.replace('_base', '').replace('_final', '')}_final.csv"
                     
-                    # Candado absoluto de index=False para la salida final a Banner
-                    kwargs_finales = CSV_KWARGS_R.copy()
-                    kwargs_finales['index'] = False
+                    # Exportación limpia, forzando saltos de línea normales y quitando el index
+                    csv_kwargs_final = {'index': False, 'encoding': 'utf-8', 'sep': ',', 'lineterminator': '\n'}
                     
-                    st.success("🎉 ¡Archivo Final listo!")
+                    st.success("🎉 ¡Archivo Final listo y limpio!")
                     st.download_button(
                         label=f"📁 📥 DESCARGAR {out_name}", 
-                        data=df_final.to_csv(**kwargs_finales).encode("utf-8"), 
+                        data=df_final.to_csv(**csv_kwargs_final).encode("utf-8"), 
                         file_name=out_name, 
                         type="primary",
                         use_container_width=True
                     )
                 else:
-                    st.error(f"❌ Desajuste: El reporte indica {len(indices)} errores, pero tu archivo corregido tiene {len(df_corr)} filas de datos. Limpia las celdas vacías al final de tu Excel de trabajo.")
+                    st.error(f"❌ Desajuste: Tienes {len(indices)} errores, pero el archivo corregido tiene {len(df_corr)} filas.")
             except Exception as e:
-                st.error(f"❌ Error durante el ensamblaje: {str(e)}")
+                st.error(f"Error: {str(e)}")
                 
 
 # ============================================================
