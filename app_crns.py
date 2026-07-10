@@ -13,10 +13,10 @@ from openpyxl.styles import Font, PatternFill, Alignment
 
 # ================= 1. CONFIGURACIÓN Y FUNCIONES ESTRUCTURALES =================
 HOJA_ALTAS = "ALTAS"
-HOJA_SALIDA_NRC = "NRC"  # Pestaña en mayúsculas estrictas
+HOJA_SALIDA_NRC = "NRC"  
 UMBRAL_FUZZY = 0.82  
 
-# 🔥 ÚNICO CAMBIO EN CONFIGURACIÓN: Formato puro para Oracle Banner
+# Formato puro para Oracle Banner
 CSV_KWARGS_R = {
     'index': False,
     'encoding': 'utf-8',
@@ -142,6 +142,10 @@ with tab1:
                 hojas_reales = [h for h in xls_a.sheet_names if h.strip().upper() == HOJA_ALTAS]
                 if hojas_reales:
                     df_a = xls_a.parse(hojas_reales[0], dtype=str)
+                    
+                    # 🔥 VACUNA ANTI-KEYERROR 1: Limpiar espacios invisibles en los nombres de las columnas
+                    df_a.columns = [str(c).strip() for c in df_a.columns]
+                    
                     essential_cols = [c for c in ["Periodo", "Campus", "Subject", "Course"] if c in df_a.columns]
                     if essential_cols: df_a = df_a.dropna(subset=essential_cols, how="all")
                     df_a = df_a.dropna(how="all")
@@ -197,7 +201,6 @@ with tab1:
                         "Materia Excel": mat_excel_orig, "Materia Catálogo": mat_cat_nombre, 
                         "Comentario": comentario, "Subj Original": subj_orig, "Crse Original": crse_orig,
                         "Subj Sugerido": subj_sug, "Crse Sugerido": crse_sug,
-                        # ⚡ LLAVE DE ALTA VELOCIDAD PARA EVITAR EL LAG:
                         "Llave_Cruce": f"{fila.get('ArchivoOrigen')}|{mat_excel_orig}|{subj_orig}|{crse_orig}"
                     })
                 
@@ -221,7 +224,6 @@ with tab1:
             else:
                 with st.expander(f"⚠️ **{arch}** — ({total_detalles} advertencias detectadas)", expanded=True):
                     
-                    # 🔥 NUEVO BOTÓN SELECCIONAR TODO 🔥
                     col_btn1, col_btn2 = st.columns([1, 2])
                     with col_btn1:
                         if st.button("✅ Seleccionar Todo", key=f"sel_all_{arch}"):
@@ -233,33 +235,38 @@ with tab1:
                     df_vista = errores_filas.drop_duplicates(subset=["Llave_Cruce"]) if quitar_rep else errores_filas
                     columnas_vista = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
                     
-                    df_editado_archivo = st.data_editor(
-                        df_vista[columnas_vista],
-                        hide_index=True,
-                        disabled=["Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original"],
-                        column_config={"Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?")},
-                        key=f"editor_{arch}",
-                        use_container_width=True
-                    )
-                    
-                    # ⚡ ACTUALIZACIÓN ULTRARRÁPIDA EN C PARA ELIMINAR EL LAG ⚡
-                    df_editado_idx = df_editado_archivo.copy()
-                    df_editado_idx["Llave_Cruce"] = arch + "|" + df_editado_idx["Materia Excel"] + "|" + df_editado_idx["Subj Original"] + "|" + df_editado_idx["Crse Original"]
-                    
-                    df_master = st.session_state.res_auditoria.copy()
-                    df_master.set_index("Llave_Cruce", inplace=True)
-                    df_editado_idx.set_index("Llave_Cruce", inplace=True)
-                    
-                    df_master.update(df_editado_idx[["Luz Verde", "Subj Sugerido", "Crse Sugerido"]])
-                    st.session_state.res_auditoria = df_master.reset_index()
+                    with st.form(key=f"form_{arch}"):
+                        st.markdown("👇 **Selecciona todas las casillas que quieras (ya no se recargará la página) y luego da clic en Confirmar.**")
+                        df_editado_archivo = st.data_editor(
+                            df_vista[columnas_vista],
+                            hide_index=True,
+                            disabled=["Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original"],
+                            column_config={"Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?")},
+                            key=f"editor_{arch}",
+                            use_container_width=True
+                        )
+                        
+                        btn_guardar = st.form_submit_button("💾 Confirmar Selección")
+                        
+                        if btn_guardar:
+                            df_editado_idx = df_editado_archivo.copy()
+                            df_editado_idx["Llave_Cruce"] = arch + "|" + df_editado_idx["Materia Excel"] + "|" + df_editado_idx["Subj Original"] + "|" + df_editado_idx["Crse Original"]
+                            
+                            df_master = st.session_state.res_auditoria.copy()
+                            df_master.set_index("Llave_Cruce", inplace=True)
+                            df_editado_idx.set_index("Llave_Cruce", inplace=True)
+                            
+                            df_master.update(df_editado_idx[["Luz Verde", "Subj Sugerido", "Crse Sugerido"]])
+                            st.session_state.res_auditoria = df_master.reset_index()
+                            st.rerun()
         
         st.markdown("---")
         if st.button("💾 Generar Bloque de Archivos CSV", type="primary"):
             corregido = st.session_state.raw_altas.copy()
             
-            # 🔥 VACUNA 2: Prevenir TypeError forzando a Texto puro 🔥
-            corregido["Subject"] = corregido["Subject"].astype(str)
-            corregido["Course"] = corregido["Course"].astype(str)
+            # Aseguramos el cast a String para que no truene si son puros números
+            if "Subject" in corregido.columns: corregido["Subject"] = corregido["Subject"].astype(str)
+            if "Course" in corregido.columns: corregido["Course"] = corregido["Course"].astype(str)
             
             for _, row in st.session_state.res_auditoria.iterrows():
                 if row["Luz Verde"] and pd.notna(row["Subj Sugerido"]):
@@ -272,20 +279,28 @@ with tab1:
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for name, sub in corregido.groupby("ArchivoOrigen"):
                     resultado_df = pd.DataFrame()
-                    resultado_df["PERIODO"] = sub["Periodo"].apply(format_r_string)
-                    resultado_df["SEDE"] = sub["Campus"].apply(format_r_string)
-                    resultado_df["SUBJ"] = sub["Subject"].apply(format_r_string)
-                    resultado_df["COURSE"] = sub["Course"].apply(format_r_string)
-                    resultado_df["PARTEPERIODO"] = sub["Parte de Periodo"].apply(format_r_string)
-                    resultado_df["STATUS"] = sub["Estatus"].apply(format_r_string)
-                    resultado_df["CAPACIDAD"] = pd.to_numeric(sub["Capacidad"], errors='coerce').astype('Int64')
-                    resultado_df["GRUPOS"] = pd.Series(1, index=resultado_df.index, dtype="Int64")
-                    resultado_df["SECCION"] = pd.to_numeric(sub["Sección"], errors='coerce').astype('Int64')
-                    resultado_df["TIPODEHORARIO"] = sub["Tipo de Horario"].apply(format_r_string)
-                    resultado_df["METODO_EDUCATIVO"] = sub["Método Educativo"].apply(format_r_string)
+                    
+                    # 🔥 VACUNA ANTI-KEYERROR 2: Extracción Segura
+                    # Si una columna no existe en el archivo original, la rellena vacía en vez de arrojar error.
+                    def extraer(columna):
+                        return sub[columna] if columna in sub.columns else pd.Series(np.nan, index=sub.index)
+
+                    resultado_df["PERIODO"] = extraer("Periodo").apply(format_r_string)
+                    resultado_df["SEDE"] = extraer("Campus").apply(format_r_string)
+                    resultado_df["SUBJ"] = extraer("Subject").apply(format_r_string)
+                    resultado_df["COURSE"] = extraer("Course").apply(format_r_string)
+                    resultado_df["PARTEPERIODO"] = extraer("Parte de Periodo").apply(format_r_string)
+                    resultado_df["STATUS"] = extraer("Estatus").apply(format_r_string)
+                    
+                    resultado_df["CAPACIDAD"] = pd.to_numeric(extraer("Capacidad"), errors='coerce').astype('Int64')
+                    resultado_df["GRUPOS"] = pd.Series(1, index=sub.index, dtype="Int64")
+                    resultado_df["SECCION"] = pd.to_numeric(extraer("Sección"), errors='coerce').astype('Int64')
+                    
+                    resultado_df["TIPODEHORARIO"] = extraer("Tipo de Horario").apply(format_r_string)
+                    resultado_df["METODO_EDUCATIVO"] = extraer("Método Educativo").apply(format_r_string)
                     resultado_df["SOCIODEINTEGRACION"] = "D2L"
-                    resultado_df["MODODECALIFICAR"] = sub["Modo de Calificar"].apply(format_r_string)
-                    resultado_df["SESION"] = sub["Sesion"].apply(format_r_string)
+                    resultado_df["MODODECALIFICAR"] = extraer("Modo de Calificar").apply(format_r_string)
+                    resultado_df["SESION"] = extraer("Sesion").apply(format_r_string)
                     
                     resultado_df = resultado_df[[
                         "PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS",
@@ -356,7 +371,6 @@ with tab_err:
     
     with col_in3: 
         file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido", type=["csv", "xlsx"], key="iny_corr_2")
-        # 🔥 MENÚ DESPLEGABLE CLARO Y FÁCIL PARA ELEGIR LA VERSIÓN O EL FINAL 🔥
         tipo_final = st.selectbox("Etiqueta del archivo a generar:", ["final", "V1", "V2", "V3", "V4", "V5"], key="suf_v2")
     
     if file_base_iny and file_err_iny and file_corr_iny:
