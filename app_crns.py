@@ -9,6 +9,7 @@ import openpyxl
 import zipfile
 import re
 from difflib import SequenceMatcher
+from openpyxl.styles import Font, PatternFill, Alignment
 
 # ================= 1. CONFIGURACIÓN Y FUNCIONES ESTRUCTURALES =================
 HOJA_ALTAS = "ALTAS"
