@@ -521,7 +521,7 @@ with tab3:
                         
                         # Estrategia A: Emparejamiento inteligente por aproximación de nombre
                         nombre_ex_clean = fx.name.lower().replace(".xlsx", "").replace("_base", "").replace(" ", "")
-                        for fc_cand en lista_csvs:
+                        for fc_cand in lista_csvs:  # <--- EL FIX ESTÁ AQUÍ ("in" en lugar de "en")
                             nombre_csv_clean = fc_cand.name.lower().replace(".csv", "").replace("_final", "").replace(" ", "")
                             if nombre_ex_clean in nombre_csv_clean or nombre_csv_clean in nombre_ex_clean:
                                 df_csv = pd.read_csv(io.BytesIO(fc_cand.getvalue()), encoding="utf-8", dtype=str)
