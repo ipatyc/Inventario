@@ -480,24 +480,24 @@ with tab3:
     
     col_a, col_b, col_c = st.columns(3)
     with col_a: file_argos = st.file_uploader("📊 1. Reporte ARGOS (.csv)", type=["csv"])
-    with col_b: files_csv_finales = st.file_uploader("📝 2. CSVs Finales Corregidos", type=["csv"], accept_multiple_files=True)
+    with col_b: files_csv_finales = st.file_uploader("📝 2. CSVs Finales Corregidos (_final)", type=["csv"], accept_multiple_files=True)
     with col_c: files_xlsx_originales = st.file_uploader("📁 3. Excels Originales (ALTAS)", type=["xlsx"], accept_multiple_files=True)
         
     if file_argos and files_csv_finales and files_xlsx_originales:
         if st.button("🚀 Procesar Cruce Directo y Generar Clúster", type="primary"):
             try:
                 # 1. LEER ARGOS Y CREAR DICCIONARIO DE NRCS
-                argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip')
+                argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip', dtype=str)
                 argos_df.columns = [re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) for c in argos_df.columns]
                 
                 col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
                 if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
 
-                argos_df["Periodo"] = argos_df["Periodo"].apply(limpiar_texto_r)
-                argos_df["Nivel"] = argos_df["Nivel"].apply(normalizar_mayusculas_r)
-                argos_df["Área"] = argos_df["Área"].apply(normalizar_mayusculas_r)
-                argos_df[col_curso] = argos_df[col_curso].apply(limpiar_texto_r)
-                argos_df["Grupo"] = argos_df["Grupo"].apply(seccion_a_dos_digitos)
+                argos_df["Periodo"] = argos_df["Periodo"].apply(limpiar_clave_texto)
+                argos_df["Nivel"] = argos_df["Nivel"].apply(normalizar_para_cruce)
+                argos_df["Área"] = argos_df["Área"].apply(normalizar_para_cruce)
+                argos_df[col_curso] = argos_df[col_curso].apply(limpiar_clave_texto)
+                argos_df["Grupo"] = argos_df["Grupo"].apply(limpia_seccion_interna)
                 
                 argos_df["_llave_argos"] = (argos_df["Periodo"] + "_" + argos_df["Nivel"] + "_" + 
                                             argos_df["Área"] + "_" + argos_df[col_curso] + "_" + argos_df["Grupo"])
@@ -508,13 +508,11 @@ with tab3:
                 # 2. AGRUPAR LOS CSV FINALIZADOS
                 dict_csvs_finalizados = {}
                 for fc in files_csv_finales:
-                    base_name, version = obtener_base_y_version(fc.name)
-                    # Si suben varios del mismo, nos quedamos con la versión más alta
-                    if base_name not in dict_csvs_finalizados or version > dict_csvs_finalizados[base_name]['v']:
-                        df_csv = pd.read_csv(io.BytesIO(fc.getvalue()), encoding="utf-8")
-                        dict_csvs_finalizados[base_name] = {'v': version, 'df': df_csv}
+                    base_name, _ = obtener_base_y_version(fc.name)
+                    df_csv = pd.read_csv(io.BytesIO(fc.getvalue()), encoding="utf-8", dtype=str)
+                    dict_csvs_finalizados[base_name] = df_csv
 
-                # 3. COPY-PASTE DIRECTO EN LOS EXCELS Y GENERAR CLÚSTER
+                # 3. PROCESAR CADA EXCEL E INYECTAR NRC
                 excels_inyectados_zip = io.BytesIO()
                 filas_para_cluster_maestro = []
                 
@@ -523,7 +521,7 @@ with tab3:
                         base_x, _ = obtener_base_y_version(fx.name)
                         
                         if base_x in dict_csvs_finalizados:
-                            df_csv_perfecto = dict_csvs_finalizados[base_x]['df']
+                            df_csv_perfecto = dict_csvs_finalizados[base_x]
                             wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
                             
                             if HOJA_ALTAS in wb.sheetnames:
@@ -532,33 +530,32 @@ with tab3:
                                 header_excel = [str(c).strip() if c is not None else "" for c in data[0]]
                                 df_excel_original = pd.DataFrame(data[1:], columns=header_excel)
                                 
-                                # VALIDACIÓN CRÍTICA: Deben tener la misma cantidad de filas
+                                # VALIDACIÓN CRÍTICA: Orden idéntico, fila por fila
                                 if len(df_excel_original) != len(df_csv_perfecto):
-                                    st.error(f"❌ Error en {fx.name}: El Excel tiene {len(df_excel_original)} filas y el CSV tiene {len(df_csv_perfecto)}. ¡No coinciden!")
+                                    st.error(f"❌ Error en {fx.name}: El Excel ({len(df_excel_original)}) y el CSV ({len(df_csv_perfecto)}) no coinciden en número de filas.")
                                     continue
                                 
                                 df_nrc_pestana = df_excel_original.copy()
                                 
-                                # --- MAGIA DE COPY-PASTE DIRECTO (LAS EQUIVALENCIAS) ---
-                                # Como están en el mismo orden, solo trasladamos los valores del CSV al Excel
+                                # --- MAGIA DE COPY-PASTE DIRECTO POR ORDEN ---
                                 df_nrc_pestana["Subject"] = df_csv_perfecto["SUBJ"].values
                                 df_nrc_pestana["Course"] = df_csv_perfecto["COURSE"].values
                                 
-                                # Ahora creamos la llave de ARGOS con los datos ya corregidos
-                                periodo_clean = df_nrc_pestana["Periodo"].apply(limpiar_texto_r)
-                                nivel_clean = df_nrc_pestana["Nivel"].apply(normalizar_mayusculas_r)
-                                subject_clean = df_nrc_pestana["Subject"].apply(normalizar_mayusculas_r)
-                                course_clean = df_nrc_pestana["Course"].apply(limpiar_texto_r)
-                                seccion_clean = df_nrc_pestana["Sección"].apply(seccion_a_dos_digitos)
+                                # Crear llave maestra para buscar el NRC en ARGOS
+                                periodo_clean = df_nrc_pestana["Periodo"].apply(limpiar_clave_texto)
+                                nivel_clean = df_nrc_pestana["Nivel"].apply(normalizar_para_cruce)
+                                subject_clean = df_nrc_pestana["Subject"].apply(normalizar_para_cruce)
+                                course_clean = df_nrc_pestana["Course"].apply(limpiar_clave_texto)
+                                seccion_clean = df_nrc_pestana["Sección"].apply(limpia_seccion_interna)
                                 
                                 llaves_filas_excel = (periodo_clean + "_" + nivel_clean + "_" + 
                                                       subject_clean + "_" + course_clean + "_" + seccion_clean)
                                 
-                                # Extraer NRCs y colocarlos en la primera columna
+                                # Extraer NRCs e insertar columna al principio
                                 vec_nrc = llaves_filas_excel.map(mapa_nrcs)
                                 df_nrc_pestana.insert(0, "NRC", vec_nrc)
                                 
-                                # Guardar la pestaña clonada en el Excel
+                                # Clonar hoja "ALTAS" a "NRC" con los datos nuevos
                                 if HOJA_SALIDA_NRC in wb.sheetnames:
                                     del wb[HOJA_SALIDA_NRC]
                                 ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
@@ -580,23 +577,23 @@ with tab3:
                         else:
                             st.warning(f"⚠️ El archivo Excel `{fx.name}` no encontró su CSV correspondiente.")
 
-                    # 4. CREAR EL CSV MAESTRO DE CLÚSTER
+                    # 4. CREAR EL CSV MAESTRO DE CLÚSTER (24 COLUMNAS)
                     if filas_para_cluster_maestro:
                         df_cluster_parcial = pd.DataFrame(filas_para_cluster_maestro)
                         df_cluster_final = pd.DataFrame(columns=COLUMNAS_CLUSTER_FINAL)
                         
-                        df_cluster_final["Periodo"] = df_cluster_parcial["Periodo"].apply(limpiar_texto_r)
+                        df_cluster_final["Periodo"] = df_cluster_parcial["Periodo"].apply(limpiar_clave_texto)
                         df_cluster_final["CRN"] = df_cluster_parcial["CRN"] 
-                        df_cluster_final["datocomplementario"] = df_cluster_parcial["datocomplementario"].apply(limpiar_texto_r)
+                        df_cluster_final["datocomplementario"] = df_cluster_parcial["datocomplementario"].apply(limpiar_clave_texto)
                         
-                        # Rellenar todo lo demás en blanco
+                        # Rellenar resto en blanco
                         df_cluster_final = df_cluster_final.fillna("")
 
                         csv_cluster_bytes = df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
                         zip_out.writestr("cluster_unificado.csv", csv_cluster_bytes)
 
                 st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
-                st.success("🎉 ¡Proceso finalizado! Se realizó el cruce directo, los Excels tienen su pestaña NRC y el archivo Clúster está listo.")
+                st.success("🎉 ¡Proceso finalizado! Excels actualizados y CSV de Clúster generado.")
                 st.rerun()
 
             except Exception as e:
@@ -605,7 +602,7 @@ with tab3:
     if st.session_state.final_argos_zip is not None:
         st.markdown("### 📥 Panel de Descarga")
         st.download_button(
-            label="📁 📥 DESCARGAR PAQUETE FINAL (.ZIP con Excels modificados + Clúster)",
+            label="📁 📥 DESCARGAR PAQUETE FINAL (.ZIP)",
             data=st.session_state.final_argos_zip,
             file_name="Paquete_Final_ARGOS_y_Cluster.zip",
             mime="application/zip",
