@@ -475,23 +475,24 @@ with tab_err:
 # ============================================================
 with tab3:
     st.header("Inyección de NRCs y Generación Estricta de Clúster")
-    st.markdown("Cruce directo: Inyecta las correcciones del CSV, mapea los NRCs de ARGOS y genera el archivo Clúster.")
+    st.markdown("Procesa todos los archivos cargados, inyecta las correcciones, mapea NRCs y consolida el Clúster.")
     
     col_a, col_b, col_c = st.columns(3)
     with col_a: file_argos = st.file_uploader("📊 1. Reporte ARGOS (.csv)", type=["csv"])
-    with col_b: files_csv_finales = st.file_uploader("📝 2. CSVs Finales Corregidos (_final)", type=["csv"], accept_multiple_files=True)
-    with col_c: files_xlsx_originales = st.file_uploader("📁 3. Excels Originales (ALTAS)", type=["xlsx"], accept_multiple_files=True)
+    with col_b: files_csv_finales = st.file_uploader("📝 2. CSVs Finales Corregidos", type=["csv"], accept_multiple_files=True)
+    with col_c: files_xlsx_originales = st.file_uploader("📁 3. Excels Originales", type=["xlsx"], accept_multiple_files=True)
         
     if file_argos and files_csv_finales and files_xlsx_originales:
-        if st.button("🚀 Procesar Cruce Directo y Generar Clúster", type="primary"):
+        if st.button("🚀 PROCESAR Y GENERAR PAQUETE FINAL", type="primary"):
             try:
-                # 1. LEER ARGOS Y CREAR DICCIONARIO
-                argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip', dtype=str)
+                # 1. PREPARAR ARGOS
+                argos_df = pd.read_csv(file_argos, encoding="utf-8", dtype=str)
                 argos_df.columns = [re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) for c in argos_df.columns]
                 
                 col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
                 if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
 
+                # Aplicar normalización a ARGOS
                 argos_df["Periodo"] = argos_df["Periodo"].apply(limpiar_clave_texto)
                 argos_df["Nivel"] = argos_df["Nivel"].apply(normalizar_para_cruce)
                 argos_df["Área"] = argos_df["Área"].apply(normalizar_para_cruce)
@@ -500,33 +501,31 @@ with tab3:
                 
                 argos_df["_llave_argos"] = (argos_df["Periodo"] + "_" + argos_df["Nivel"] + "_" + 
                                             argos_df["Área"] + "_" + argos_df[col_curso] + "_" + argos_df["Grupo"])
-                
-                argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
                 mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
 
-                # 2. ORDENAR ARCHIVOS PARA PROCESAR POR POSICIÓN
+                # 2. ORDENAR PARA PROCESAR POR POSICIÓN
                 lista_csvs = sorted(files_csv_finales, key=lambda x: x.name)
                 lista_excels = sorted(files_xlsx_originales, key=lambda x: x.name)
-
-                # 3. PROCESAR CADA PAR
+                
+                # 3. PROCESAMIENTO
                 excels_inyectados_zip = io.BytesIO()
                 filas_para_cluster_maestro = []
                 
                 with zipfile.ZipFile(excels_inyectados_zip, "w", zipfile.ZIP_DEFLATED) as zip_out:
                     for i in range(len(lista_excels)):
                         fx = lista_excels[i]
+                        wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
                         
                         if i < len(lista_csvs):
                             fc = lista_csvs[i]
                             df_csv = pd.read_csv(io.BytesIO(fc.getvalue()), encoding="utf-8", dtype=str)
-                            wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
-                            df_excel_original = pd.DataFrame(list(wb[HOJA_ALTAS].values)[1:], columns=[str(c).strip() for c in list(wb[HOJA_ALTAS].values)[0]])
                             
-                            if len(df_excel_original) != len(df_csv):
-                                st.error(f"❌ Error: {fx.name} y {fc.name} no coinciden en número de filas.")
-                                continue
+                            # Obtener datos de la pestaña ALTAS
+                            ws_altas = wb[HOJA_ALTAS]
+                            data = list(ws_altas.values)
+                            df_excel_original = pd.DataFrame(data[1:], columns=[str(c).strip() for c in data[0]])
                             
-                            # --- Mapeo de Equivalencias (14 columnas) ---
+                            # Mapeo de 14 columnas
                             df_nrc_pestana = pd.DataFrame({
                                 "PERIODO": df_csv["PERIODO"], "SEDE": df_csv["SEDE"], "SUBJ": df_csv["SUBJ"],
                                 "COURSE": df_csv["COURSE"], "PARTEPERIODO": df_csv["PARTEPERIODO"], "STATUS": df_csv["STATUS"],
@@ -536,7 +535,7 @@ with tab3:
                                 "SOCIODEINTEGRACION": "D2L", "MODODECALIFICAR": df_csv["MODODECALIFICAR"], "SESION": df_csv["SESION"]
                             })
                             
-                            # Llave de cruce
+                            # Llave para cruce
                             llaves = (df_nrc_pestana["PERIODO"].apply(limpiar_clave_texto) + "_" + 
                                       df_excel_original["Nivel"].apply(normalizar_para_cruce) + "_" + 
                                       df_nrc_pestana["SUBJ"].apply(normalizar_para_cruce) + "_" + 
@@ -545,23 +544,28 @@ with tab3:
                             
                             df_nrc_pestana.insert(0, "NRC", llaves.map(mapa_nrcs))
                             
-                            # Guardar en nueva hoja NRC
+                            # Guardar pestaña NRC
                             if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
                             ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
                             ws_nrc.append(list(df_nrc_pestana.columns))
                             for fila in df_nrc_pestana.values: ws_nrc.append([None if pd.isna(v) else v for v in fila])
                             
-                            excel_buffer = io.BytesIO()
-                            wb.save(excel_buffer)
-                            zip_out.writestr(fx.name, excel_buffer.getvalue())
+                            # Guardar Excel en buffer
+                            buf_excel = io.BytesIO()
+                            wb.save(buf_excel)
+                            zip_out.writestr(fx.name, buf_excel.getvalue())
                             
-                            # Recolectar para Cluster
+                            # Acumular filas para clúster
                             for idx, row in df_excel_original.iterrows():
-                                filas_para_cluster_maestro.append({"Periodo": row.get("Periodo"), "CRN": df_nrc_pestana.iloc[idx, 0], "datocomplementario": row.get("Clúster")})
+                                filas_para_cluster_maestro.append({
+                                    "Periodo": row.get("Periodo"),
+                                    "CRN": df_nrc_pestana.iloc[idx, 0],
+                                    "datocomplementario": row.get("Clúster")
+                                })
                         else:
-                            st.warning(f"⚠️ `{fx.name}` no encontró CSV correspondiente.")
+                            st.warning(f"⚠️ El Excel {fx.name} no tiene pareja CSV.")
 
-                    # 4. CSV MAESTRO CLÚSTER (24 COLUMNAS)
+                    # 4. CSV CLÚSTER FINAL
                     if filas_para_cluster_maestro:
                         df_cluster = pd.DataFrame(columns=COLUMNAS_CLUSTER_FINAL)
                         df_parcial = pd.DataFrame(filas_para_cluster_maestro)
@@ -571,9 +575,11 @@ with tab3:
                         zip_out.writestr("cluster_unificado.csv", df_cluster.fillna("").to_csv(**CSV_KWARGS_R).encode("utf-8"))
 
                 st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
-                st.success("🎉 ¡Proceso finalizado!")
+                st.success(f"✅ ¡Procesados {len(lista_excels)} archivos correctamente!")
                 st.rerun()
-            except Exception as e: st.error(f"❌ Error: {str(e)}")
+            except Exception as e:
+                st.error(f"❌ Ocurrió un inconveniente: {str(e)}")
 
     if st.session_state.final_argos_zip is not None:
         st.download_button("📁 📥 DESCARGAR PAQUETE FINAL (.ZIP)", st.session_state.final_argos_zip, "Paquete_Final.zip", "application/zip", use_container_width=True, type="primary")
+
