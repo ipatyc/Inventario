@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -16,12 +16,12 @@ HOJA_ALTAS = "ALTAS"
 HOJA_SALIDA_NRC = "NRC"  # Pestaña en mayúsculas estrictas
 UMBRAL_FUZZY = 0.82  
 
+# 🔥 ÚNICO CAMBIO EN CONFIGURACIÓN: Formato puro para Oracle Banner
 CSV_KWARGS_R = {
     'index': False,
     'encoding': 'utf-8',
-    'quoting': csv.QUOTE_NONNUMERIC, 
-    'lineterminator': '\r\n',        
-    'na_rep': 'NA'                   
+    'sep': ',',
+    'lineterminator': '\n'
 }
 
 # Plantilla estricta de 24 columnas para el Clúster
@@ -116,8 +116,8 @@ if "delta_files" not in st.session_state:
 if "final_argos_zip" not in st.session_state: 
     st.session_state.final_argos_zip = None
 
-st.set_page_config(page_title="Consola Iris Cavazos", page_icon="️", layout="wide")
-st.title("️ Consola de Control de Materias e Inyección de NRCs (Flujo Multi-CSV)")
+st.set_page_config(page_title="Consola Iris Cavazos", page_icon="⚙️", layout="wide")
+st.title("⚙️ Consola de Control de Materias e Inyección de NRCs (Flujo Multi-CSV)")
 st.markdown("---")
 
 tab1, tab_err, tab3 = st.tabs([
@@ -337,22 +337,12 @@ with tab1:
                     ]
                     resultado_df = resultado_df[columnas_ordenadas]
                     
-                    # 🔥 HIGIENE PROFESIONAL ANTI-COMILLAS Y ANTI-ESPACIOS PARA BANNER 🔥
+                    # 🔥 HIGIENE ESTRICTA BANNER 🔥
                     for col in resultado_df.columns:
-                        resultado_df[col] = resultado_df[col].astype(str).str.replace('"', '', regex=False).str.strip()
-                        resultado_df[col] = resultado_df[col].replace(['nan', 'None', '<NA>', 'NaN'], '')
+                        resultado_df[col] = resultado_df[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
                     
                     csv_filename = f"{name.rsplit('.', 1)[0] if '.' in name else name}.csv"
-                    
-                    # 🔥 CONFIGURACIÓN DE SALIDA DE ALTA SEGURIDAD PARA ORACLE BANNER
-                    # Eliminamos el index (evita desfasar columnas) y forzamos lineterminator puro '\n'
-                    kwargs_p1_estricto = {
-                        'index': False, 
-                        'encoding': 'utf-8', 
-                        'sep': ',', 
-                        'lineterminator': '\n'
-                    }
-                    csv_string = resultado_df.to_csv(**kwargs_p1_estricto)
+                    csv_string = resultado_df.to_csv(**CSV_KWARGS_R)
                     
                     zip_file.writestr(csv_filename, csv_string.encode('utf-8'))
                     st.session_state.csv_files_to_download[csv_filename] = csv_string.encode('utf-8')
@@ -401,9 +391,9 @@ with tab_err:
             # Copiamos la base y nos quedamos SOLO con los renglones del error
             df_delta = df_base.iloc[indices].copy()
             
-            # Limpiamos espacios basura a los lados para evitar que Banner llore con el "buffer too small"
+            # 🔥 HIGIENE ESTRICTA BANNER 🔥
             for col in df_delta.columns:
-                df_delta[col] = df_delta[col].astype(str).str.strip().replace(['nan', 'None', '<NA>'], '')
+                df_delta[col] = df_delta[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
             
             base_name_ext = file_base_ext.name.rsplit('.', 1)[0]
             
@@ -412,9 +402,6 @@ with tab_err:
                 ["Descargar en Excel (.xlsx)", "Descargar en formato CSV (.csv)", "Editar en vivo en la consola"],
                 horizontal=True
             )
-            
-            # Parámetros estrictos para exportar un CSV idéntico al original, sin índices
-            csv_kwargs = {'index': False, 'encoding': 'utf-8'}
             
             if modo_delta == "Descargar en Excel (.xlsx)":
                 excel_buffer = io.BytesIO()
@@ -428,16 +415,22 @@ with tab_err:
             elif modo_delta == "Descargar en formato CSV (.csv)":
                 st.download_button(
                     "📥 Descargar Fragmento en CSV", 
-                    data=df_delta.to_csv(**csv_kwargs).encode("utf-8"), 
+                    data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
                     file_name=f"Errores_{base_name_ext}_V{num_v_ext}.csv", 
                     type="secondary"
                 )
             else:
                 st.caption("Edita los datos directamente en la tabla y descarga el pedacito ya corregido.")
                 df_editado = st.data_editor(df_delta, key="ed_vivo", use_container_width=True)
+                
+                # 🔥 HIGIENE ESTRICTA BANNER 🔥
+                df_editado_clean = df_editado.copy()
+                for col in df_editado_clean.columns:
+                    df_editado_clean[col] = df_editado_clean[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
+                
                 st.download_button(
                     "📥 Descargar Fragmento Corregido (.csv)", 
-                    data=df_editado.to_csv(**csv_kwargs).encode("utf-8"), 
+                    data=df_editado_clean.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
                     file_name=f"Corregidas_{base_name_ext}_V{num_v_ext}.csv", 
                     type="primary"
                 )
@@ -474,29 +467,26 @@ with tab_err:
                 if len(indices) == len(df_corr):
                     df_final = df_base.copy()
                     
-                    # Limpiamos comillas y espacios del parche antes de inyectar
+                    # 🔥 HIGIENE ESTRICTA BANNER 🔥
                     for col in df_corr.columns:
-                        df_corr[col] = df_corr[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>'], '')
+                        df_corr[col] = df_corr[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
                     
                     # Inyección exacta de los datos
                     for col in df_final.columns:
                         if col in df_corr.columns:
                             df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
                     
-                    # Última pasada a toda la base para asegurar que Banner no trunque nada
+                    # 🔥 HIGIENE ESTRICTA BANNER 🔥
                     for col in df_final.columns:
-                        df_final[col] = df_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>'], '')
+                        df_final[col] = df_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
                     
                     base_name_iny = file_base_iny.name.rsplit('.', 1)[0]
                     out_name = f"{base_name_iny.replace('_base', '').replace('_final', '')}_final.csv"
                     
-                    # Exportación limpia, forzando saltos de línea normales y quitando el index
-                    csv_kwargs_final = {'index': False, 'encoding': 'utf-8', 'sep': ',', 'lineterminator': '\n'}
-                    
                     st.success("🎉 ¡Archivo Final listo y limpio!")
                     st.download_button(
                         label=f"📁 📥 DESCARGAR {out_name}", 
-                        data=df_final.to_csv(**csv_kwargs_final).encode("utf-8"), 
+                        data=df_final.to_csv(**CSV_KWARGS_R).encode("utf-8"), 
                         file_name=out_name, 
                         type="primary",
                         use_container_width=True
@@ -640,7 +630,6 @@ with tab3:
                                 # ===================================================
                                 # ✨ DISEÑO DE FORMATO PROFESIONAL (ESTRICTO) ✨
                                 # ===================================================
-                                # 1. Definición de la paleta de colores y fuentes (Calibri 11)
                                 font_base = Font(name="Calibri", size=11, bold=False)
                                 font_nrc = Font(name="Calibri", size=11, bold=True)
                                 font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -651,24 +640,20 @@ with tab3:
                                 align_header = Alignment(horizontal="center", vertical="center", wrap_text=True)
                                 align_center = Alignment(horizontal="center", vertical="center")
                                 
-                                # Aplicar fuente base general a toda la cuadrícula activa
                                 for row in ws_nrc.iter_rows(min_row=1, max_row=ws_nrc.max_row, min_col=1, max_col=ws_nrc.max_column):
                                     for cell in row:
                                         cell.font = font_base
                                 
-                                # Aplicar formato al encabezado (Fila 1)
                                 for cell in ws_nrc[1]:
                                     cell.font = font_header
                                     cell.fill = fill_header
                                     cell.alignment = align_header
                                 
-                                # Aplicar formato destacado a la columna NRC (Columna A, omitiendo la celda del título)
                                 for cell in ws_nrc['A'][1:]:
                                     cell.font = font_nrc
                                     cell.fill = fill_nrc
                                     cell.alignment = align_center
                                 
-                                # 2. Auto-ajuste inteligente del ancho de las columnas
                                 for col in ws_nrc.columns:
                                     max_len = 0
                                     col_letter = col[0].column_letter
@@ -703,7 +688,11 @@ with tab3:
                         df_cluster_final["CRN"] = df_parcial["CRN"] 
                         df_cluster_final["datocomplementario"] = df_parcial["datocomplementario"].apply(limpiar_clave_texto)
                         
-                        csv_cluster_bytes = df_cluster_final.fillna("").to_csv(**CSV_KWARGS_R).encode("utf-8")
+                        # 🔥 HIGIENE ESTRICTA BANNER 🔥
+                        for col in df_cluster_final.columns:
+                            df_cluster_final[col] = df_cluster_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
+                        
+                        csv_cluster_bytes = df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
                         zip_out.writestr("cluster_unificado.csv", csv_cluster_bytes)
 
                 # --- IMPRESIÓN DE RESULTADOS ---
@@ -735,6 +724,3 @@ with tab3:
             use_container_width=True,
             type="primary"
         )
-
-
-
