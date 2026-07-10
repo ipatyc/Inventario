@@ -475,7 +475,7 @@ with tab_err:
 # ============================================================
 with tab3:
     st.header("Inyección de NRCs y Generación Estricta de Clúster")
-    st.markdown("Procesa todos los archivos cargados, inyecta las correcciones, mapea NRCs y consolida el Clúster.")
+    st.markdown("Procesa todos los archivos, clona ALTAS, sobreescribe correcciones e inyecta el NRC.")
     
     col_a, col_b, col_c = st.columns(3)
     with col_a: file_argos = st.file_uploader("📊 1. Reporte ARGOS (.csv)", type=["csv"])
@@ -504,7 +504,7 @@ with tab3:
                 argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
                 mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
 
-                # 2. FUNCIÓN DE LIMPIEZA PARA EMPAREJAMIENTO ROBUSTO
+                # 2. FUNCIÓN DE LIMPIEZA PARA EMPAREJAMIENTO
                 def simplificar_nombre(nombre):
                     n = nombre.lower()
                     for basura in ['.xlsx', '.xls', '.csv', '_final', '_base', '_v1', '_v2', '_v3', '_v4', 'corregidas_', 'errores_']:
@@ -543,53 +543,67 @@ with tab3:
                                 
                                 df_excel_original = pd.DataFrame(data[1:], columns=[str(c).strip() if c is not None else "" for c in data[0]])
                                 
-                                # 🔥 EXORCISTA DE FILAS FANTASMAS 🔥
-                                # Borra los renglones que están completamente vacíos o que solo tienen celdas "None"
+                                # Limpieza de filas fantasmas
                                 df_excel_original = df_excel_original.dropna(how='all')
                                 df_csv = df_csv.dropna(how='all')
                                 
-                                # Si Excel metió "espacios en blanco" en lugar de None, nos aseguramos limpiando filas sin Periodo
                                 if "Periodo" in df_excel_original.columns:
                                     df_excel_original = df_excel_original[df_excel_original["Periodo"].astype(str).str.strip() != ""]
                                 if "PERIODO" in df_csv.columns:
                                     df_csv = df_csv[df_csv["PERIODO"].astype(str).str.strip() != ""]
                                 
-                                # Re-seteamos los índices para que no haya brincos al pegar los datos
                                 df_excel_original = df_excel_original.reset_index(drop=True)
                                 df_csv = df_csv.reset_index(drop=True)
                                 
-                                # AHORA SÍ, VALIDAMOS LAS DIMENSIONES
                                 if len(df_excel_original) != len(df_csv):
                                     alertas_dimensiones.append(f"❌ Excel `{fx.name}` tiene **{len(df_excel_original)} filas de datos**, pero el CSV `{fc_usado.name}` tiene **{len(df_csv)} filas de datos**.")
                                     continue
                                 
-                                df_nrc_pestana = pd.DataFrame({
-                                    "PERIODO": df_csv["PERIODO"].values,
-                                    "SEDE": df_csv["SEDE"].values,
-                                    "SUBJ": df_csv["SUBJ"].values,
-                                    "COURSE": df_csv["COURSE"].values,
-                                    "PARTEPERIODO": df_csv["PARTEPERIODO"].values,
-                                    "STATUS": df_csv["STATUS"].values,
-                                    "CAPACIDAD": df_csv["CAPACIDAD"].values,
-                                    "GRUPOS": "1",
-                                    "SECCION": pd.to_numeric(df_csv["SECCION"], errors='coerce'),
-                                    "TIPODEHORARIO": df_csv["TIPODEHORARIO"].values,
-                                    "METODO_EDUCATIVO": df_csv["METODO_EDUCATIVO"].values,
-                                    "SOCIODEINTEGRACION": "D2L",
-                                    "MODODECALIFICAR": df_csv["MODODECALIFICAR"].values,
-                                    "SESION": df_csv["SESION"].values
-                                })
+                                # 🔥 EL CAMBIO ESTÁ AQUÍ 🔥
+                                # 1. Clonamos la pestaña de Excel original (con tooooodas sus columnas)
+                                df_nrc_pestana = df_excel_original.copy()
                                 
+                                # 2. Diccionario de equivalencias para reescribir solo lo que arreglamos
+                                mapeo_columnas = {
+                                    "Periodo": "PERIODO",
+                                    "Campus": "SEDE",
+                                    "Subject": "SUBJ",
+                                    "Course": "COURSE",
+                                    "Parte de Periodo": "PARTEPERIODO",
+                                    "Estatus": "STATUS",
+                                    "Capacidad": "CAPACIDAD",
+                                    "Sección": "SECCION",
+                                    "Tipo de Horario": "TIPODEHORARIO",
+                                    "Método Educativo": "METODO_EDUCATIVO",
+                                    "Modo de Calificar": "MODODECALIFICAR",
+                                    "Sesion": "SESION"
+                                }
+                                
+                                # 3. Inyección quirúrgica (reemplazamos en el clon los datos corregidos del CSV)
+                                for col_ex, col_cs in mapeo_columnas.items():
+                                    if col_ex in df_nrc_pestana.columns and col_cs in df_csv.columns:
+                                        if col_ex == "Sección":
+                                            df_nrc_pestana[col_ex] = pd.to_numeric(df_csv[col_cs], errors='coerce').values
+                                        else:
+                                            df_nrc_pestana[col_ex] = df_csv[col_cs].values
+                                
+                                # Agregamos las dos condiciones forzadas que venían en tu R
+                                df_nrc_pestana["Grupos"] = "1"
+                                df_nrc_pestana["Socio de Integración"] = "D2L"
+                                
+                                # 4. Calculamos y traemos el NRC de ARGOS
                                 llaves_cruce = (
-                                    df_nrc_pestana["PERIODO"].apply(limpiar_clave_texto) + "_" + 
+                                    df_nrc_pestana["Periodo"].apply(limpiar_clave_texto) + "_" + 
                                     df_excel_original["Nivel"].apply(normalizar_para_cruce) + "_" + 
-                                    df_nrc_pestana["SUBJ"].apply(normalizar_para_cruce) + "_" + 
-                                    df_nrc_pestana["COURSE"].apply(limpiar_clave_texto) + "_" + 
-                                    df_nrc_pestana["SECCION"].apply(str).apply(limpia_seccion_interna)
+                                    df_nrc_pestana["Subject"].apply(normalizar_para_cruce) + "_" + 
+                                    df_nrc_pestana["Course"].apply(limpiar_clave_texto) + "_" + 
+                                    df_nrc_pestana["Sección"].apply(str).apply(limpia_seccion_interna)
                                 )
                                 
+                                # Insertamos el NRC en la posición 0 (hasta la izquierda)
                                 df_nrc_pestana.insert(0, "NRC", llaves_cruce.map(mapa_nrcs))
                                 
+                                # Guardamos la pestaña ensamblada en el Excel
                                 if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
                                 ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
                                 ws_nrc.append(list(df_nrc_pestana.columns))
@@ -603,6 +617,7 @@ with tab3:
                                 zip_out.writestr(nombre_salida_excel, excel_buffer.getvalue())
                                 archivos_procesados_con_exito += 1
                                 
+                                # Recolección para Clúster
                                 for idx_row, row_ex in df_excel_original.iterrows():
                                     filas_para_cluster_maestro.append({
                                         "Periodo": row_ex.get("Periodo"),
@@ -655,3 +670,6 @@ with tab3:
             use_container_width=True,
             type="primary"
         )
+
+
+
