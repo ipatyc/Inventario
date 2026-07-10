@@ -470,7 +470,6 @@ with tab_err:
             except Exception as e:
                 st.error(f"Error: {str(e)}")
 
-
 # ============================================================
 # PESTAÑA 3: INYECCIÓN DE NRCS Y GENERACIÓN DE CLÚSTER
 # ============================================================
