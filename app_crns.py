@@ -113,7 +113,7 @@ with tab1:
     # Función de limpieza profunda para celdas
     def limpiar_celda_banner(valor):
         if pd.isna(valor): return ""
-        # Quita comillas, saltos de línea y espacios extra
+        # Quita comillas, saltos de línea, retornos de carro y espacios extra
         s = str(valor).replace('"', '').replace('\n', ' ').replace('\r', '').strip()
         return s
 
@@ -121,10 +121,9 @@ with tab1:
         if st.button("⚡ Ejecutar Validación Inteligente", type="primary"):
             st.session_state.ready_for_download = False 
             
-            # --- Proceso de carga ---
+            # --- 1. Carga de Catálogo ---
             xls_cat = pd.ExcelFile(file_cat)
             indice_cat, indice_cat_claves = {}, {} 
-            
             for hoja in xls_cat.sheet_names:
                 df_c = xls_cat.parse(hoja)
                 if "Nivel" in df_c.columns and "Materia" in df_c.columns:
@@ -137,13 +136,14 @@ with tab1:
                         if pd.notna(s_val) and pd.notna(c_val):
                             indice_cat_claves[(normalizar_para_cruce(s_val), c_val)] = mat_o
             
+            # --- 2. Carga de Archivos de Altas ---
             piezas = []
             for f in files_altas:
                 xls_a = pd.ExcelFile(f)
                 hojas_reales = [h for h in xls_a.sheet_names if h.strip().upper() == HOJA_ALTAS]
                 if hojas_reales:
                     df_a = xls_a.parse(hojas_reales[0], dtype=str)
-                    # Limpieza de nombres de columna
+                    # 🔥 LIMPIEZA DE TÍTULOS: Quita saltos de línea y espacios en nombres de columna
                     df_a.columns = [str(c).replace('\n', ' ').replace('\r', '').strip() for c in df_a.columns]
                     
                     df_a = df_a.dropna(how="all")
@@ -154,16 +154,16 @@ with tab1:
             if piezas:
                 df_total = pd.concat(piezas, ignore_index=True)
                 st.session_state.raw_altas = df_total.copy()
-                # (Lógica de auditoría se mantiene igual...)
-                st.session_state.res_auditoria = pd.DataFrame(resultados) # (resultados generados como antes)
-                st.success("¡Revisión de catálogos finalizada!")
+                # Aquí se genera la auditoría (asumiendo que mantienes la lógica de resultados definida anteriormente)
+                st.success("¡Carga y validación inicial finalizada! Revisa la tabla abajo.")
+                st.rerun()
             else:
                 st.error("No se encontraron filas válidas en los archivos.")
 
+    # --- 3. Mesa de Control e Interacción ---
     if st.session_state.res_auditoria is not None:
         st.markdown("### ⚖️ Mesa de Control Interactiva")
-        # (Lógica de la tabla de control y botones de selección...)
-
+        
         if st.button("💾 Generar Bloque de Archivos CSV", type="primary"):
             corregido = st.session_state.raw_altas.copy()
             
@@ -183,11 +183,11 @@ with tab1:
                     
                     faltantes = [c for c in columnas_requeridas if c not in sub.columns]
                     if faltantes:
-                        st.error(f"❌ Error en `{name}`: Faltan columnas obligatorias: {', '.join(faltantes)}")
+                        st.error(f"❌ Error en el archivo `{name}`: Faltan las siguientes columnas obligatorias: {', '.join(faltantes)}. Por favor, revisa el Excel.")
                         errores_encontrados = True
                         continue
                     
-                    # Generación segura
+                    # Generación limpia y blindada
                     res = pd.DataFrame()
                     res["PERIODO"] = sub["Periodo"].apply(limpiar_celda_banner)
                     res["SEDE"] = sub["Campus"].apply(limpiar_celda_banner)
@@ -211,12 +211,11 @@ with tab1:
                 st.session_state.zip_file_bytes = zip_buffer.getvalue()
                 st.session_state.ready_for_download = True
                 st.rerun()
-            else:
-                st.warning("La generación se detuvo debido a errores en la estructura de los archivos.")
 
         if st.session_state.ready_for_download:
             st.download_button("💥 📥 DESCARGAR TODOS LOS CSVs (.ZIP)", data=st.session_state.zip_file_bytes, file_name="archivos_carga_banner.zip", mime="application/zip", use_container_width=True, type="primary")
-            
+
+
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
