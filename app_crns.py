@@ -450,6 +450,19 @@ with tab3:
     with col_b: files_csv_finales = st.file_uploader("📝 2. CSVs Finales Corregidos", type=["csv"], accept_multiple_files=True)
     with col_c: files_xlsx_originales = st.file_uploader("📁 3. Excels Originales", type=["xlsx"], accept_multiple_files=True)
         
+    # 🔥 FUNCIÓN LOCAL DE BÚSQUEDA EXTREMA PARA PESTAÑA 3
+    def normalizar_para_busqueda_t3(texto):
+        s = str(texto).lower()
+        s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+        return re.sub(r'[^a-z0-9]', '', s)
+
+    columnas_esperadas_t3 = [
+        "Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia",
+        "Parte de Periodo", "Estatus", "Capacidad", "Sección", 
+        "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"
+    ]
+    mapa_huellas_t3 = {normalizar_para_busqueda_t3(col): col for col in columnas_esperadas_t3}
+
     if file_argos and files_csv_finales and files_xlsx_originales:
         if st.button("🚀 PROCESAR Y GENERAR PAQUETE FINAL", type="primary"):
             try:
@@ -499,6 +512,17 @@ with tab3:
                                 if not data: continue
                                 
                                 df_excel_original = pd.DataFrame(data[1:], columns=[str(c).strip() if c is not None else "" for c in data[0]])
+                                
+                                # 🔥 EL PARCHE MÁGICO DE BÚSQUEDA EXTREMA EN PESTAÑA 3 🔥
+                                nuevas_columnas = []
+                                for col in df_excel_original.columns:
+                                    huella = normalizar_para_busqueda_t3(col)
+                                    if huella in mapa_huellas_t3:
+                                        nuevas_columnas.append(mapa_huellas_t3[huella])
+                                    else:
+                                        nuevas_columnas.append(col)
+                                df_excel_original.columns = nuevas_columnas
+                                
                                 df_excel_original = df_excel_original.dropna(how='all')
                                 df_csv = df_csv.dropna(how='all')
                                 
@@ -576,7 +600,7 @@ with tab3:
                         df_cluster_final = pd.DataFrame(index=df_parcial.index, columns=COLUMNAS_CLUSTER_FINAL)
                         df_cluster_final["Periodo"] = df_parcial["Periodo"].apply(limpiar_clave_texto)
                         df_cluster_final["CRN"] = df_parcial["CRN"] 
-                        df_cluster_final["datocomplementario"] = df_parcial["datocomplementario"].apply(limpiar_clave_texto)
+                        df_cluster_final["datocomplementario"] = df_parcial["datocomplementario"].apply(limpiar_texto) if 'limpiar_texto' in globals() else df_parcial["datocomplementario"].apply(limpiar_clave_texto)
                         
                         for col in df_cluster_final.columns:
                             df_cluster_final[col] = df_cluster_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
