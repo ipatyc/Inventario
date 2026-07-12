@@ -372,7 +372,9 @@ with tab_err:
     st.header("⚠️ Reporte de Errores y Ensamblaje Final")
     st.markdown("Extrae filas con error, corrígelas y genera el archivo para la Pestaña 3.")
     
+    # --- PASO 1: EXTRAER O EDITAR EL PEDACITO CON ERROR ---
     st.subheader("✂️ 1. Extraer o corregir el pedacito con errores")
+    
     col_ex1, col_ex2, col_ex3 = st.columns(3)
     with col_ex1: file_base_ext = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="ext_base_1")
     with col_ex2: file_err_ext = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ext_err_1")
@@ -402,14 +404,15 @@ with tab_err:
 
     st.markdown("---")
     
+    # --- PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL ---
     st.subheader("💉 2. Inyectar correcciones y generar Archivo Final")
+    
     col_in1, col_in2, col_in3 = st.columns(3)
     with col_in1: file_base_iny = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="iny_base_2")
     with col_in2: file_err_iny = st.file_uploader("📊 2. Reporte de Errores (.xlsx)", type=["xlsx"], key="iny_err_2")
-    
     with col_in3: 
         file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido", type=["csv", "xlsx"], key="iny_corr_2")
-        tipo_final = st.selectbox("Etiqueta del archivo a generar:", ["final", "V1", "V2", "V3", "V4", "V5"], key="suf_v2")
+        tipo_final = st.text_input("Etiqueta final (V1, V2, final):", value="final", key="suf_v2")
     
     if file_base_iny and file_err_iny and file_corr_iny:
         if st.button("🚀 Ensamblar Archivo Final", type="primary"):
@@ -425,6 +428,7 @@ with tab_err:
                     for col in df_final.columns:
                         if col in df_corr.columns: df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
                     
+                    # Limpieza final para Banner antes de exportar
                     for col in df_final.columns:
                         df_final[col] = df_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
                     
@@ -437,6 +441,7 @@ with tab_err:
                     st.error(f"❌ Desajuste: {len(indices)} errores detectados vs {len(df_corr)} filas en el parche.")
             except Exception as e:
                 st.error(f"Error: {str(e)}")
+
 
 # ============================================================
 # PESTAÑA 3: INYECCIÓN DE NRCS Y GENERACIÓN DE CLÚSTER
