@@ -381,28 +381,42 @@ with tab_err:
     with col_ex3: sufijo_version = st.text_input("🔢 Sufijo de versión (Ej: V1, V2):", value="V1", key="suf_v1")
     
     if file_base_ext and file_err_ext:
-        df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
-        df_err = pd.read_excel(file_err_ext, skiprows=2).dropna(subset=["Línea"])
-        indices = [r - 2 for r in df_err["Línea"].astype(int).unique().tolist() if 0 <= (r - 2) < len(df_base)]
-        
-        if indices:
-            df_delta = df_base.iloc[indices].copy()
-            base_name_ext = file_base_ext.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
-            nombre_archivo = f"{base_name_ext}_{sufijo_version}"
+        try: # 🛡️ ESCUDO PARA EVITAR QUE LA APP TRUENE
+            df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
+            df_err = pd.read_excel(file_err_ext, skiprows=2)
             
-            modo_delta = st.radio("⚙️ ¿Cómo deseas descargar?", ["Excel (.xlsx)", "CSV (.csv)", "Editar en vivo"], horizontal=True, key="modo_1")
+            # 🔥 Búsqueda inteligente: Encuentra la columna aunque no tenga acento o tenga espacios
+            col_linea = [c for c in df_err.columns if "linea" in str(c).strip().lower().replace("í", "i")]
             
-            if modo_delta == "Excel (.xlsx)":
-                buf = io.BytesIO()
-                df_delta.to_excel(buf, index=False)
-                st.download_button("📥 Descargar Fragmento", data=buf.getvalue(), file_name=f"{nombre_archivo}.xlsx")
-            elif modo_delta == "CSV (.csv)":
-                st.download_button("📥 Descargar Fragmento", data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv")
+            if not col_linea:
+                st.error("❌ No se encontró la columna 'Línea' en el reporte de errores. Verifica el Excel.")
             else:
-                df_editado = st.data_editor(df_delta, key="ed_vivo_1", use_container_width=True)
-                st.download_button("📥 Descargar Corregido", data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary")
-
-    st.markdown("---")
+                nombre_col = col_linea[0]
+                df_err = df_err.dropna(subset=[nombre_col])
+                
+                # Convertimos a float primero por si trae decimales fantasma de Excel, luego a int
+                indices = [int(float(r)) - 2 for r in df_err[nombre_col].unique().tolist() if pd.notna(r) and 0 <= (int(float(r)) - 2) < len(df_base)]
+                
+                if indices:
+                    df_delta = df_base.iloc[indices].copy()
+                    base_name_ext = file_base_ext.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
+                    nombre_archivo = f"{base_name_ext}_{sufijo_version}"
+                    
+                    modo_delta = st.radio("⚙️ ¿Cómo deseas descargar?", ["Excel (.xlsx)", "CSV (.csv)", "Editar en vivo"], horizontal=True, key="modo_1")
+                    
+                    if modo_delta == "Excel (.xlsx)":
+                        buf = io.BytesIO()
+                        df_delta.to_excel(buf, index=False)
+                        st.download_button("📥 Descargar Fragmento", data=buf.getvalue(), file_name=f"{nombre_archivo}.xlsx")
+                    elif modo_delta == "CSV (.csv)":
+                        st.download_button("📥 Descargar Fragmento", data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv")
+                    else:
+                        df_editado = st.data_editor(df_delta, key="ed_vivo_1", use_container_width=True)
+                        st.download_button("📥 Descargar Corregido", data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary")
+        
+        except Exception as e:
+            # Si algo catastrófico pasa, te avisa en rojo en lugar de tirar toda la consola
+            st.error(f"❌ Ocurrió un error al leer los archivos: {str(e)}")
     
     # --- PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL ---
     st.subheader("💉 2. Inyectar correcciones y generar Archivo Final")
