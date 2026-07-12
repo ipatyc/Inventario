@@ -380,43 +380,68 @@ with tab_err:
     with col_ex2: file_err_ext = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ext_err_1")
     with col_ex3: sufijo_version = st.text_input("🔢 Sufijo de versión (Ej: V1, V2):", value="V1", key="suf_v1")
     
+    # 🔥 MEMORIAS CACHÉ PARA EVITAR RECARGAS Y CAÍDAS CRÍTICAS
+    if "df_delta_cache" not in st.session_state: st.session_state.df_delta_cache = None
+    if "nombre_delta_cache" not in st.session_state: st.session_state.nombre_delta_cache = None
+    if "llave_control_archivos" not in st.session_state: st.session_state.llave_control_archivos = ""
+
     if file_base_ext and file_err_ext:
-        try: # 🛡️ ESCUDO PARA EVITAR QUE LA APP TRUENE
-            df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
-            df_err = pd.read_excel(file_err_ext, skiprows=2)
-            
-            # 🔥 Búsqueda inteligente: Encuentra la columna aunque no tenga acento o tenga espacios
-            col_linea = [c for c in df_err.columns if "linea" in str(c).strip().lower().replace("í", "i")]
-            
-            if not col_linea:
-                st.error("❌ No se encontró la columna 'Línea' en el reporte de errores. Verifica el Excel.")
-            else:
-                nombre_col = col_linea[0]
-                df_err = df_err.dropna(subset=[nombre_col])
+        # Monitoreamos si cambiaste de archivos para resetear el estado anterior
+        llave_actual = f"{file_base_ext.name}_{file_err_ext.name}_{sufijo_version}"
+        if st.session_state.llave_control_archivos != llave_actual:
+            st.session_state.df_delta_cache = None
+            st.session_state.nombre_delta_cache = None
+            st.session_state.llave_control_archivos = llave_actual
+
+        # 🔥 BOTÓN DISPARADOR: Lee y calcula una sola vez, protegiendo la conexión frontend/backend
+        if st.button("🔍 Cargar y Procesar Reporte de Errores", use_container_width=True, type="secondary"):
+            try:
+                df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
+                df_err = pd.read_excel(file_err_ext, skiprows=2)
                 
-                # Convertimos a float primero por si trae decimales fantasma de Excel, luego a int
-                indices = [int(float(r)) - 2 for r in df_err[nombre_col].unique().tolist() if pd.notna(r) and 0 <= (int(float(r)) - 2) < len(df_base)]
+                # Búsqueda higiénica de la columna Línea
+                df_err.columns = [limpiar_nombre_columna(c) for c in df_err.columns]
+                col_linea = [c for c in df_err.columns if "linea" in str(c).strip().lower().replace("í", "i")]
                 
-                if indices:
-                    df_delta = df_base.iloc[indices].copy()
-                    base_name_ext = file_base_ext.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
-                    nombre_archivo = f"{base_name_ext}_{sufijo_version}"
+                if not col_linea:
+                    st.error("❌ No se encontró la columna 'Línea' en el archivo de errores. Verifica tu estructura.")
+                else:
+                    nombre_col = col_linea[0]
+                    df_err = df_err.dropna(subset=[nombre_col])
                     
-                    modo_delta = st.radio("⚙️ ¿Cómo deseas descargar?", ["Excel (.xlsx)", "CSV (.csv)", "Editar en vivo"], horizontal=True, key="modo_1")
+                    # Extracción matemática segura mapeando floats a ints
+                    indices = [int(float(r)) - 2 for r in df_err[nombre_col].unique().tolist() if pd.notna(r) and 0 <= (int(float(r)) - 2) < len(df_base)]
                     
-                    if modo_delta == "Excel (.xlsx)":
-                        buf = io.BytesIO()
-                        df_delta.to_excel(buf, index=False)
-                        st.download_button("📥 Descargar Fragmento", data=buf.getvalue(), file_name=f"{nombre_archivo}.xlsx")
-                    elif modo_delta == "CSV (.csv)":
-                        st.download_button("📥 Descargar Fragmento", data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv")
+                    if indices:
+                        st.session_state.df_delta_cache = df_base.iloc[indices].copy()
+                        base_name_ext = file_base_ext.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
+                        st.session_state.nombre_delta_cache = f"{base_name_ext}_{sufijo_version}"
+                        st.success(f"🎉 Éxito: Se aislaron {len(indices)} filas con anomalías. Configura tu descarga abajo.")
                     else:
-                        df_editado = st.data_editor(df_delta, key="ed_vivo_1", use_container_width=True)
-                        st.download_button("📥 Descargar Corregido", data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary")
+                        st.warning("⚠️ No se identificaron números de línea válidos dentro de las dimensiones del archivo base.")
+            except Exception as e:
+                st.error(f"❌ Error crítico de lectura física: {str(e)}")
+
+    # 🔥 INTERFAZ VIRTUAL: Lee de la memoria caché, haciendo inmune a la app de caídas por clics continuos
+    if st.session_state.df_delta_cache is not None:
+        st.markdown("---")
+        modo_delta = st.radio("⚙️ ¿Cómo deseas descargar o corregir el fragmento?", ["Excel (.xlsx)", "CSV (.csv)", "Editar en vivo"], horizontal=True, key="modo_1")
         
-        except Exception as e:
-            # Si algo catastrófico pasa, te avisa en rojo en lugar de tirar toda la consola
-            st.error(f"❌ Ocurrió un error al leer los archivos: {str(e)}")
+        nombre_archivo = st.session_state.nombre_delta_cache
+        df_delta = st.session_state.df_delta_cache
+        
+        if modo_delta == "Excel (.xlsx)":
+            buf = io.BytesIO()
+            df_delta.to_excel(buf, index=False)
+            st.download_button("📥 Descargar Fragmento (.xlsx)", data=buf.getvalue(), file_name=f"{nombre_archivo}.xlsx", type="primary", use_container_width=True)
+        
+        elif modo_delta == "CSV (.csv)":
+            st.download_button("📥 Descargar Fragmento (.csv)", data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary", use_container_width=True)
+        
+        else:
+            st.info("✏️ **Modo Edición Interactiva:** Escribe los ajustes directamente sobre las celdas en pantalla. Al finalizar, confirma la descarga en el botón inferior.")
+            df_editado = st.data_editor(df_delta, key="ed_vivo_1", use_container_width=True)
+            st.download_button("📥 Descargar Parche Corregido (.csv)", data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary", use_container_width=True)
     
 # --- PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL ---
     st.subheader("💉 2. Inyectar correcciones y generar Archivo Final")
