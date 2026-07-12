@@ -418,7 +418,7 @@ with tab_err:
             # Si algo catastrófico pasa, te avisa en rojo en lugar de tirar toda la consola
             st.error(f"❌ Ocurrió un error al leer los archivos: {str(e)}")
     
-    # --- PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL ---
+# --- PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL ---
     st.subheader("💉 2. Inyectar correcciones y generar Archivo Final")
     
     col_in1, col_in2, col_in3 = st.columns(3)
@@ -428,33 +428,59 @@ with tab_err:
         file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido", type=["csv", "xlsx"], key="iny_corr_2")
         tipo_final = st.text_input("Etiqueta final (V1, V2, final):", value="final", key="suf_v2")
     
+    # 🔥 INICIALIZAR MEMORIA: Para que la app no "truene" al querer descargar
+    if "archivo_final_bytes" not in st.session_state: st.session_state.archivo_final_bytes = None
+    if "archivo_final_nombre" not in st.session_state: st.session_state.archivo_final_nombre = None
+    
     if file_base_iny and file_err_iny and file_corr_iny:
         if st.button("🚀 Ensamblar Archivo Final", type="primary"):
-            try:
+            try: # 🛡️ ESCUDO GLOBAL ANTI-CAÍDAS
                 df_base = pd.read_csv(file_base_iny, encoding="utf-8", dtype=str)
-                df_err = pd.read_excel(file_err_iny, skiprows=2).dropna(subset=["Línea"])
-                df_corr = pd.read_excel(file_corr_iny, dtype=str) if file_corr_iny.name.endswith('.xlsx') else pd.read_csv(file_corr_iny, encoding="utf-8", dtype=str)
+                df_err = pd.read_excel(file_err_iny, skiprows=2)
                 
-                indices = [r - 2 for r in df_err["Línea"].astype(int).unique().tolist() if 0 <= (r - 2) < len(df_base)]
+                # 🔥 Búsqueda inteligente de la columna Línea 
+                col_linea_iny = [c for c in df_err.columns if "linea" in str(c).strip().lower().replace("í", "i")]
                 
-                if len(indices) == len(df_corr):
-                    df_final = df_base.copy()
-                    for col in df_final.columns:
-                        if col in df_corr.columns: df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
-                    
-                    # Limpieza final para Banner antes de exportar
-                    for col in df_final.columns:
-                        df_final[col] = df_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
-                    
-                    base_name_iny = file_base_iny.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
-                    out_name = f"{base_name_iny}_{tipo_final}.csv"
-                    
-                    st.success(f"🎉 ¡Archivo {out_name} listo!")
-                    st.download_button(label=f"📁 📥 DESCARGAR {out_name}", data=df_final.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=out_name, type="primary", use_container_width=True)
+                if not col_linea_iny:
+                    st.error("❌ No se encontró la columna 'Línea' en el reporte.")
                 else:
-                    st.error(f"❌ Desajuste: {len(indices)} errores detectados vs {len(df_corr)} filas en el parche.")
+                    nombre_col_iny = col_linea_iny[0]
+                    df_err = df_err.dropna(subset=[nombre_col_iny])
+                    df_corr = pd.read_excel(file_corr_iny, dtype=str) if file_corr_iny.name.endswith('.xlsx') else pd.read_csv(file_corr_iny, encoding="utf-8", dtype=str)
+                    
+                    # 🔥 Conversión segura de floats/nans a int
+                    indices = [int(float(r)) - 2 for r in df_err[nombre_col_iny].unique().tolist() if pd.notna(r) and 0 <= (int(float(r)) - 2) < len(df_base)]
+                    
+                    if len(indices) == len(df_corr):
+                        df_final = df_base.copy()
+                        for col in df_final.columns:
+                            if col in df_corr.columns: df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
+                        
+                        # Limpieza final para Banner
+                        for col in df_final.columns:
+                            df_final[col] = df_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
+                        
+                        base_name_iny = file_base_iny.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
+                        out_name = f"{base_name_iny}_{tipo_final}.csv"
+                        
+                        # 🔥 GUARDAMOS EN LA MEMORIA PARA QUE EL BOTÓN SOBREVIVA
+                        st.session_state.archivo_final_bytes = df_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
+                        st.session_state.archivo_final_nombre = out_name
+                        st.success(f"🎉 ¡Archivo {out_name} listo! Da clic en el botón debajo para descargar.")
+                    else:
+                        st.error(f"❌ Desajuste de filas: {len(indices)} errores en Banner vs {len(df_corr)} filas corregidas en tu archivo.")
             except Exception as e:
-                st.error(f"Error: {str(e)}")
+                st.error(f"❌ Error interno al ensamblar: {str(e)}")
+
+    # 🔥 BOTÓN DE DESCARGA AFUERA DEL "IF BUTTON": Esto evita la recarga mortal
+    if st.session_state.archivo_final_bytes is not None:
+        st.download_button(
+            label=f"📁 📥 DESCARGAR {st.session_state.archivo_final_nombre}", 
+            data=st.session_state.archivo_final_bytes, 
+            file_name=st.session_state.archivo_final_nombre, 
+            type="primary", 
+            use_container_width=True
+        )
 
 
 # ============================================================
