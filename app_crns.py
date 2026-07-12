@@ -110,6 +110,19 @@ with tab1:
     with col1: file_cat = st.file_uploader("📑 Catálogo de Materias Estatales (Excel)", type=["xlsx"])
     with col2: files_altas = st.file_uploader("📁 Archivos de ALTAS (Puedes subir varios Excel)", accept_multiple_files=True, type=["xlsx"])
     
+    # 🔥 BÚSQUEDA EXTREMA: Función para encontrar huellas digitales de columnas (ignora acentos, símbolos, saltos y espacios)
+    def normalizar_para_busqueda(texto):
+        s = str(texto).lower()
+        s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+        return re.sub(r'[^a-z0-9]', '', s)
+        
+    columnas_esperadas = [
+        "Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia",
+        "Parte de Periodo", "Estatus", "Capacidad", "Sección", 
+        "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion"
+    ]
+    mapa_huellas = {normalizar_para_busqueda(col): col for col in columnas_esperadas}
+
     if files_altas and file_cat:
         if st.button("⚡ Ejecutar Validación Inteligente", type="primary"):
             st.session_state.ready_for_download = False 
@@ -143,9 +156,19 @@ with tab1:
                 if hojas_reales:
                     df_a = xls_a.parse(hojas_reales[0], dtype=str)
                     
-                    # Limpiamos solo los saltos de línea más graves para que la tabla base se vea bien
-                    df_a.columns = [str(c).replace('\n', ' ').replace('\r', '').strip() for c in df_a.columns]
+                    # 🔥 APLICAMOS LA BÚSQUEDA EXTREMA AQUÍ
+                    # Mapeamos la columna sucia a tu nombre oficial para que tu código funcione perfecto abajo.
+                    nuevas_columnas = []
+                    for col in df_a.columns:
+                        huella = normalizar_para_busqueda(col)
+                        if huella in mapa_huellas:
+                            nuevas_columnas.append(mapa_huellas[huella])
+                        else:
+                            nuevas_columnas.append(col)
+                    df_a.columns = nuevas_columnas
                     
+                    essential_cols = [c for c in ["Periodo", "Campus", "Subject", "Course"] if c in df_a.columns]
+                    if essential_cols: df_a = df_a.dropna(subset=essential_cols, how="all")
                     df_a = df_a.dropna(how="all")
                     if not df_a.empty:
                         df_a["ArchivoOrigen"] = f.name
@@ -262,7 +285,6 @@ with tab1:
         if st.button("💾 Generar Bloque de Archivos CSV", type="primary"):
             corregido = st.session_state.raw_altas.copy()
             
-            # Prevenir TypeError forzando tipo texto
             if "Subject" in corregido.columns: corregido["Subject"] = corregido["Subject"].astype(str)
             if "Course" in corregido.columns: corregido["Course"] = corregido["Course"].astype(str)
             
@@ -275,89 +297,63 @@ with tab1:
             zip_buffer = io.BytesIO()
             errores_encontrados = False
             
-            # 🔥 FUNCIÓN DE BÚSQUEDA EXTREMA: Quita símbolos, acentos, espacios y pasa a minúsculas
-            def normalizar_para_busqueda(texto):
-                s = str(texto).lower()
-                s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
-                s = re.sub(r'[^a-z0-9]', '', s) # Destruye todo lo que no sea letra o número
-                return s
-            
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for name, sub in corregido.groupby("ArchivoOrigen"):
                     
-                    # Mapa de columnas del Excel: { "partedeperiodo": "Parte de Periodo " }
-                    mapa_columnas_excel = {normalizar_para_busqueda(col): col for col in sub.columns}
+                    # Verificamos si logramos encontrar las requeridas antes de crear el CSV
+                    columnas_requeridas_csv = [
+                        "Periodo", "Campus", "Subject", "Course", 
+                        "Parte de Periodo", "Estatus", "Capacidad", 
+                        "Sección", "Tipo de Horario", "Método Educativo", 
+                        "Modo de Calificar", "Sesion"
+                    ]
                     
-                    # Diccionario de lo que necesitamos encontrar (Nombre Oficial -> Huella Normalizada)
-                    columnas_necesarias = {
-                        "Periodo": "periodo",
-                        "Campus": "campus", 
-                        "Subject": "subject", 
-                        "Course": "course", 
-                        "Parte de Periodo": "partedeperiodo", 
-                        "Estatus": "estatus", 
-                        "Capacidad": "capacidad", 
-                        "Sección": "seccion", 
-                        "Tipo de Horario": "tipodehorario", 
-                        "Método Educativo": "metodoeducativo", 
-                        "Modo de Calificar": "mododecalificar", 
-                        "Sesion": "sesion"
-                    }
-                    
-                    faltantes = []
-                    mapeo_exacto = {}
-                    
-                    # Revisar si encontramos la huella de cada columna necesaria
-                    for nombre_oficial, huella in columnas_necesarias.items():
-                        if huella in mapa_columnas_excel:
-                            mapeo_exacto[nombre_oficial] = mapa_columnas_excel[huella] # Guardamos el nombre original feo
-                        else:
-                            faltantes.append(nombre_oficial)
-                    
-                    # Si de plano no está, arrojamos error y detenemos este archivo
+                    faltantes = [c for c in columnas_requeridas_csv if c not in sub.columns]
                     if faltantes:
-                        st.error(f"❌ **Error en el archivo `{name}`**:\nNo se encontró la información para: **{', '.join(faltantes)}**.\n*(Incluso buscando sin mayúsculas, espacios, símbolos ni acentos, la columna no existe).*")
+                        st.error(f"❌ **Error en `{name}`**: No se encontró la información para: **{', '.join(faltantes)}**.\n*(Incluso buscando ignorando acentos, símbolos y espacios).*")
                         errores_encontrados = True
                         continue
                     
-                    # Si todas pasaron la prueba, extraemos usando el mapeo exacto
+                    # 🔥 TU CÓDIGO ORIGINAL INTACTO 🔥
                     resultado_df = pd.DataFrame()
-                    resultado_df["PERIODO"] = sub[mapeo_exacto["Periodo"]].apply(format_r_string)
-                    resultado_df["SEDE"] = sub[mapeo_exacto["Campus"]].apply(format_r_string)
-                    resultado_df["SUBJ"] = sub[mapeo_exacto["Subject"]].apply(format_r_string)
-                    resultado_df["COURSE"] = sub[mapeo_exacto["Course"]].apply(format_r_string)
-                    resultado_df["PARTEPERIODO"] = sub[mapeo_exacto["Parte de Periodo"]].apply(format_r_string)
-                    resultado_df["STATUS"] = sub[mapeo_exacto["Estatus"]].apply(format_r_string)
+                    resultado_df["PERIODO"] = sub["Periodo"].apply(format_r_string)
+                    resultado_df["SEDE"] = sub["Campus"].apply(format_r_string)
+                    resultado_df["SUBJ"] = sub["Subject"].apply(format_r_string)
+                    resultado_df["COURSE"] = sub["Course"].apply(format_r_string)
+                    resultado_df["PARTEPERIODO"] = sub["Parte de Periodo"].apply(format_r_string)
+                    resultado_df["STATUS"] = sub["Estatus"].apply(format_r_string)
                     
-                    resultado_df["CAPACIDAD"] = pd.to_numeric(sub[mapeo_exacto["Capacidad"]], errors='coerce').astype('Int64')
-                    resultado_df["GRUPOS"] = pd.Series(1, index=sub.index, dtype="Int64")
-                    resultado_df["SECCION"] = pd.to_numeric(sub[mapeo_exacto["Sección"]], errors='coerce').astype('Int64')
+                    resultado_df["CAPACIDAD"] = pd.to_numeric(sub["Capacidad"], errors='coerce').astype('Int64')
+                    resultado_df["GRUPOS"] = pd.Series(1, index=resultado_df.index, dtype="Int64")
+                    resultado_df["SECCION"] = pd.to_numeric(sub["Sección"], errors='coerce').astype('Int64')
                     
-                    resultado_df["TIPODEHORARIO"] = sub[mapeo_exacto["Tipo de Horario"]].apply(format_r_string)
-                    resultado_df["METODO_EDUCATIVO"] = sub[mapeo_exacto["Método Educativo"]].apply(format_r_string)
+                    resultado_df["TIPODEHORARIO"] = sub["Tipo de Horario"].apply(format_r_string)
+                    resultado_df["METODO_EDUCATIVO"] = sub["Método Educativo"].apply(format_r_string)
                     resultado_df["SOCIODEINTEGRACION"] = "D2L"
-                    resultado_df["MODODECALIFICAR"] = sub[mapeo_exacto["Modo de Calificar"]].apply(format_r_string)
-                    resultado_df["SESION"] = sub[mapeo_exacto["Sesion"]].apply(format_r_string)
+                    resultado_df["MODODECALIFICAR"] = sub["Modo de Calificar"].apply(format_r_string)
+                    resultado_df["SESION"] = sub["Sesion"].apply(format_r_string)
                     
-                    resultado_df = resultado_df[[
+                    columnas_ordenadas = [
                         "PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS",
                         "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO",
                         "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION"
-                    ]]
+                    ]
+                    resultado_df = resultado_df[columnas_ordenadas]
                     
+                    # 🔥 HIGIENE ESTRICTA BANNER 🔥
                     for col in resultado_df.columns:
                         resultado_df[col] = resultado_df[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
                     
                     csv_filename = f"{name.rsplit('.', 1)[0] if '.' in name else name}.csv"
-                    zip_file.writestr(csv_filename, resultado_df.to_csv(**CSV_KWARGS_R).encode('utf-8'))
+                    csv_string = resultado_df.to_csv(**CSV_KWARGS_R)
+                    
+                    zip_file.writestr(csv_filename, csv_string.encode('utf-8'))
+                    st.session_state.csv_files_to_download[csv_filename] = csv_string.encode('utf-8')
             
-            # Solo generamos el botón de descarga si no hubo errores fatales de columnas
             if not errores_encontrados:
                 st.session_state.zip_file_bytes = zip_buffer.getvalue()
                 st.session_state.ready_for_download = True
                 st.rerun()
-            else:
-                st.warning("⚠️ La generación del paquete se detuvo porque uno o más archivos tienen columnas faltantes. Corrige los Excels y vuelve a intentarlo.")
 
         if st.session_state.ready_for_download:
             st.markdown("### 📥 Panel de Descarga")
