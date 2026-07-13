@@ -128,6 +128,12 @@ with tab1:
             st.session_state.ready_for_download = False 
             st.toast("Cargando Catálogo de Materias...", icon="📑")
             
+            # 👇 NUEVO PARCHE: Función para fulminar espacios internos y externos en claves
+            def sin_espacios(x):
+                v = format_r_string(x)
+                if pd.isna(v): return v
+                return str(v).replace(" ", "").upper()
+            
             xls_cat = pd.ExcelFile(file_cat)
             indice_cat, indice_cat_claves = {}, {} 
             
@@ -137,8 +143,10 @@ with tab1:
                     for _, f in df_c.iterrows():
                         niv = normalizar_para_cruce(f.get("Nivel"))
                         mat_o = str(f.get("Materia")).strip()
-                        s_val = format_r_string(f.get("Subj"))
-                        c_val = format_r_string(f.get("Crse"))
+                        
+                        # 🔥 Aplicamos el parche de espacios aquí (Catálogo)
+                        s_val = sin_espacios(f.get("Subj"))
+                        c_val = sin_espacios(f.get("Crse"))
                         
                         indice_cat.setdefault(niv, []).append({
                             "mat_orig": mat_o, "mat_norm": normalizar_para_cruce(f.get("Materia")), 
@@ -183,8 +191,10 @@ with tab1:
                     niv_n = normalizar_para_cruce(fila.get("Nivel"))
                     mat_excel_orig = fila.get("Nombre de la Materia")
                     mat_n = normalizar_para_cruce(mat_excel_orig)
-                    subj_orig = format_r_string(fila.get("Subject"))
-                    crse_orig = format_r_string(fila.get("Course"))
+                    
+                    # 🔥 Aplicamos el parche de espacios aquí (Excel Original)
+                    subj_orig = sin_espacios(fila.get("Subject"))
+                    crse_orig = sin_espacios(fila.get("Course"))
                     
                     candidatos = indice_cat.get(niv_n, [])
                     matches_exactos = [c for c in candidatos if c["mat_norm"] == mat_n]
@@ -314,12 +324,15 @@ with tab1:
                         errores_encontrados = True
                         continue
                     
-                    # 🔥 TU CÓDIGO ORIGINAL INTACTO 🔥
+                    # 🔥 TU CÓDIGO ORIGINAL INTACTO + PARCHE AL GENERAR CSV 🔥
                     resultado_df = pd.DataFrame()
                     resultado_df["PERIODO"] = sub["Periodo"].apply(format_r_string)
                     resultado_df["SEDE"] = sub["Campus"].apply(format_r_string)
-                    resultado_df["SUBJ"] = sub["Subject"].apply(format_r_string)
-                    resultado_df["COURSE"] = sub["Course"].apply(format_r_string)
+                    
+                    # 👇 NUEVO PARCHE: Fulmina espacios de las claves para que bajen limpios
+                    resultado_df["SUBJ"] = sub["Subject"].apply(lambda x: str(format_r_string(x)).replace(" ", "").upper() if pd.notna(format_r_string(x)) else np.nan)
+                    resultado_df["COURSE"] = sub["Course"].apply(lambda x: str(format_r_string(x)).replace(" ", "").upper() if pd.notna(format_r_string(x)) else np.nan)
+                    
                     resultado_df["PARTEPERIODO"] = sub["Parte de Periodo"].apply(format_r_string)
                     resultado_df["STATUS"] = sub["Estatus"].apply(format_r_string)
                     
