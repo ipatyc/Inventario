@@ -375,6 +375,11 @@ with tab_err:
     # --- PASO 1: EXTRAER O EDITAR EL PEDACITO CON ERROR ---
     st.subheader("✂️ 1. Extraer o corregir el pedacito con errores")
     
+    # 🔥 LA FUNCIÓN ESTÁ AQUÍ MISMO PARA QUE NUNCA MARQUE "NOT DEFINED" 🔥
+    def limpiar_nombre_columna(col):
+        if pd.isna(col): return ""
+        return " ".join(str(col).split())
+    
     col_ex1, col_ex2, col_ex3 = st.columns(3)
     with col_ex1: file_base_ext = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="ext_base_1")
     with col_ex2: file_err_ext = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ext_err_1")
@@ -399,7 +404,7 @@ with tab_err:
                 df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
                 df_err = pd.read_excel(file_err_ext, skiprows=2)
                 
-                # Destruimos saltos de línea y espacios en los títulos de la tabla de errores
+                # Destruimos saltos de línea y espacios en los títulos de la tabla de errores usando la función local
                 df_err.columns = [limpiar_nombre_columna(c) for c in df_err.columns]
                 
                 # Búsqueda higiénica de la columna Línea (ignora acentos y mayúsculas/minúsculas)
@@ -444,6 +449,7 @@ with tab_err:
             st.info("✏️ **Modo Edición Interactiva:** Escribe tus ajustes directamente en las celdas de la tabla. Al finalizar, haz clic en el botón inferior para exportarlo.")
             df_editado = st.data_editor(df_delta, key="ed_vivo_1", use_container_width=True)
             st.download_button("📥 Descargar Parche Corregido (.csv)", data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary", use_container_width=True)
+
     
 # --- PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL ---
     st.subheader("💉 2. Inyectar correcciones y generar Archivo Final")
