@@ -444,7 +444,6 @@ with tab_err:
             st.info("✏️ **Modo Edición Interactiva:** Escribe tus ajustes directamente en las celdas de la tabla. Al finalizar, haz clic en el botón inferior para exportarlo.")
             df_editado = st.data_editor(df_delta, key="ed_vivo_1", use_container_width=True)
             st.download_button("📥 Descargar Parche Corregido (.csv)", data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary", use_container_width=True)
-            
     
 # --- PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL ---
     st.subheader("💉 2. Inyectar correcciones y generar Archivo Final")
