@@ -104,11 +104,23 @@ tab1, tab_err, tab3 = st.tabs([
 # PESTAÑA 1: VALIDACIÓN Y GENERACIÓN DE CSV INDIVIDUALES
 # ============================================================
 with tab1:
-    st.header("Validación de Claves y Generación de bloques CSV")
+    # 👇 NUEVO PARCHE: Título y Botón de Limpiar alineados
+    col_tit, col_btn = st.columns([4, 1])
+    with col_tit:
+        st.header("Validación de Claves y Generación de bloques CSV")
+    with col_btn:
+        if st.button("🔄 Limpiar / Recomenzar", type="secondary", use_container_width=True):
+            # Matamos la memoria de los archivos y resultados de esta pestaña
+            claves_a_borrar = ["file_cat_uploader", "files_altas_uploader", "res_auditoria", "raw_altas", "ready_for_download"]
+            for k in claves_a_borrar:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.rerun()
     
     col1, col2 = st.columns(2)
-    with col1: file_cat = st.file_uploader("📑 Catálogo de Materias Estatales (Excel)", type=["xlsx"])
-    with col2: files_altas = st.file_uploader("📁 Archivos de ALTAS (Puedes subir varios Excel)", accept_multiple_files=True, type=["xlsx"])
+    # 👇 NUEVO PARCHE: Agregamos 'key' a los uploaders para que el botón los pueda resetear
+    with col1: file_cat = st.file_uploader("📑 Catálogo de Materias Estatales (Excel)", type=["xlsx"], key="file_cat_uploader")
+    with col2: files_altas = st.file_uploader("📁 Archivos de ALTAS (Puedes subir varios Excel)", accept_multiple_files=True, type=["xlsx"], key="files_altas_uploader")
     
     # 🔥 BÚSQUEDA EXTREMA: Función para encontrar huellas digitales de columnas (ignora acentos, símbolos, saltos y espacios)
     def normalizar_para_busqueda(texto):
