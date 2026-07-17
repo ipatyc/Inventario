@@ -737,13 +737,13 @@ with tab3:
 
 
 # ============================================================
-    # 👇 NUEVO PARCHE: SECCIÓN EXCLUSIVA PARA PURO CLÚSTER (INDEPENDIENTE)
+    # 👇 NUEVO PARCHE: SECCIÓN EXCLUSIVA PARA PURO CLÚSTER (JALANDO NRC DEL EXCEL)
     # ============================================================
     st.markdown("---")
     st.subheader("🧩 Extracción Exclusiva de Clúster")
-    st.markdown("Sube únicamente tus Excels originales aquí. Se extraerá la información del clúster directo a la plantilla (la columna CRN quedará vacía al no cruzar con ARGOS).")
+    st.markdown("Sube únicamente tus Excels (que ya contienen el NRC y Clúster). Se extraerá la información directo a la plantilla de 24 columnas.")
     
-    files_xlsx_solo = st.file_uploader("📁 Excels Originales (Solo para Clúster)", type=["xlsx"], accept_multiple_files=True, key="excels_solo")
+    files_xlsx_solo = st.file_uploader("📁 Excels (con NRC y Clúster)", type=["xlsx"], accept_multiple_files=True, key="excels_solo")
     
     if files_xlsx_solo:
         if st.button("⚡ GENERAR SOLO CLÚSTER", type="secondary"):
@@ -759,12 +759,17 @@ with tab3:
                     if hojas_reales:
                         df_excel_original = xls_a.parse(hojas_reales[0], dtype=str)
                         
-                        # Normalizamos columnas para encontrar "Periodo" y "Clúster"
+                        # Normalizamos columnas para encontrar "Periodo", "Clúster" y "NRC"
                         nuevas_columnas = []
                         for col in df_excel_original.columns:
                             huella = normalizar_para_busqueda_t3(col)
-                            if huella in mapa_huellas_t3: nuevas_columnas.append(mapa_huellas_t3[huella])
-                            else: nuevas_columnas.append(col)
+                            # 🔥 Parche: Aseguramos encontrar la columna NRC o CRN venga como venga
+                            if huella == "nrc" or huella == "crn": 
+                                nuevas_columnas.append("NRC")
+                            elif huella in mapa_huellas_t3: 
+                                nuevas_columnas.append(mapa_huellas_t3[huella])
+                            else: 
+                                nuevas_columnas.append(col)
                         df_excel_original.columns = nuevas_columnas
                         
                         df_excel_original = df_excel_original.dropna(how='all')
@@ -774,11 +779,11 @@ with tab3:
                         
                         archivos_procesados_solo += 1
                         
-                        # Extraemos directo a la lista (sin NRC)
+                        # 🔥 AHORA SÍ: Extraemos el NRC y el Clúster directo del Excel
                         for _, row_ex in df_excel_original.iterrows():
                             filas_para_cluster_solo.append({
                                 "Periodo": row_ex.get("Periodo", ""), 
-                                "CRN": "",  # Se va vacío porque no hay cruce con ARGOS
+                                "CRN": row_ex.get("NRC", ""), 
                                 "datocomplementario": row_ex.get("Clúster", "")
                             })
 
@@ -787,7 +792,7 @@ with tab3:
                     df_cluster_final = pd.DataFrame(index=df_parcial.index, columns=COLUMNAS_CLUSTER_FINAL)
                     
                     df_cluster_final["Periodo"] = df_parcial["Periodo"].apply(limpiar_clave_texto)
-                    df_cluster_final["CRN"] = df_parcial["CRN"] 
+                    df_cluster_final["CRN"] = df_parcial["CRN"].apply(limpiar_clave_texto) 
                     df_cluster_final["datocomplementario"] = df_parcial["datocomplementario"].apply(limpiar_texto) if 'limpiar_texto' in globals() else df_parcial["datocomplementario"].apply(limpiar_clave_texto)
                     
                     for col in df_cluster_final.columns:
