@@ -545,6 +545,9 @@ with tab_err:
 # PESTAÑA 3: INYECCIÓN DE NRCS Y GENERACIÓN DE CLÚSTER
 # ============================================================
 with tab3:
+    # --- INICIALIZAR MEMORIA PARA CLÚSTER SOLO ---
+    if "cluster_solo_bytes" not in st.session_state: st.session_state.cluster_solo_bytes = None
+
     st.header("Inyección de NRCs y Generación Estricta de Clúster")
     st.markdown("Procesa todos los archivos, clona ALTAS, sobreescribe correcciones e inyecta el NRC.")
     
@@ -698,17 +701,17 @@ with tab3:
                         else:
                             alertas_parejas.append(f"⚠️ `{fx.name}` no encontró ningún CSV compatible.")
 
-                    if filas_para_cluster_maestro:
-                        df_parcial = pd.DataFrame(filas_para_cluster_maestro)
-                        df_cluster_final = pd.DataFrame(index=df_parcial.index, columns=COLUMNAS_CLUSTER_FINAL)
-                        df_cluster_final["Periodo"] = df_parcial["Periodo"].apply(limpiar_clave_texto)
-                        df_cluster_final["CRN"] = df_parcial["CRN"] 
-                        df_cluster_final["datocomplementario"] = df_parcial["datocomplementario"].apply(limpiar_texto) if 'limpiar_texto' in globals() else df_parcial["datocomplementario"].apply(limpiar_clave_texto)
-                        
-                        for col in df_cluster_final.columns:
-                            df_cluster_final[col] = df_cluster_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
-                        
-                        zip_out.writestr("cluster_unificado.csv", df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8"))
+                if filas_para_cluster_maestro:
+                    df_parcial = pd.DataFrame(filas_para_cluster_maestro)
+                    df_cluster_final = pd.DataFrame(index=df_parcial.index, columns=COLUMNAS_CLUSTER_FINAL)
+                    df_cluster_final["Periodo"] = df_parcial["Periodo"].apply(limpiar_clave_texto)
+                    df_cluster_final["CRN"] = df_parcial["CRN"] 
+                    df_cluster_final["datocomplementario"] = df_parcial["datocomplementario"].apply(limpiar_texto) if 'limpiar_texto' in globals() else df_parcial["datocomplementario"].apply(limpiar_clave_texto)
+                    
+                    for col in df_cluster_final.columns:
+                        df_cluster_final[col] = df_cluster_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
+                    
+                    zip_out.writestr("cluster_unificado.csv", df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8"))
 
                 if archivos_procesados_con_exito > 0:
                     st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
@@ -725,10 +728,145 @@ with tab3:
                 st.error(f"❌ Ocurrió un inconveniente crítico: {str(e)}")
 
     if st.session_state.final_argos_zip is not None:
-        st.markdown("---")
-        st.markdown("### 📥 Panel de Descarga")
+        st.markdown("### 📥 Panel de Descarga (Paquete Completo)")
         st.download_button(
             label="📁 📥 DESCARGAR PAQUETE FINAL (.ZIP)", data=st.session_state.final_argos_zip,
             file_name="Paquete_Final_ARGOS_y_Cluster.zip", mime="application/zip",
             use_container_width=True, type="primary"
+        )
+
+
+    # ============================================================
+    # 👇 NUEVO PARCHE: SECCIÓN EXCLUSIVA PARA PURO CLÚSTER
+    # ============================================================
+    st.markdown("---")
+    st.subheader("🧩 Extracción Exclusiva de Clúster")
+    st.markdown("Usa esta opción si solo necesitas obtener el archivo `cluster_unificado.csv` sin modificar ni generar los archivos Excel (ideal para agilizar cuando no requieres pintar los Excels).")
+    
+    if file_argos and files_csv_finales and files_xlsx_originales:
+        if st.button("⚡ GENERAR SOLO CLÚSTER", type="secondary"):
+            try:
+                # Replicamos la lectura limpia
+                argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip', dtype=str)
+                argos_df.columns = [re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) for c in argos_df.columns]
+                col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
+                if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
+
+                argos_df["Periodo"] = argos_df["Periodo"].apply(limpiar_clave_texto)
+                argos_df["Nivel"] = argos_df["Nivel"].apply(normalizar_para_cruce)
+                argos_df["Área"] = argos_df["Área"].apply(normalizar_para_cruce)
+                argos_df[col_curso] = argos_df[col_curso].apply(limpiar_clave_texto)
+                argos_df["Grupo"] = argos_df["Grupo"].apply(limpia_seccion_interna)
+                
+                argos_df["_llave_argos"] = (argos_df["Periodo"] + "_" + argos_df["Nivel"] + "_" + 
+                                            argos_df["Área"] + "_" + argos_df[col_curso] + "_" + argos_df["Grupo"])
+                argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
+                mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
+
+                def simplificar_nombre(nombre):
+                    n = nombre.lower()
+                    for basura in ['.xlsx', '.xls', '.csv', '_final', '_base', '_v1', '_v2', '_v3', '_v4', 'corregidas_', 'errores_']:
+                        n = n.replace(basura, '')
+                    return n.strip().replace(" ", "")
+
+                filas_para_cluster_solo = []
+                archivos_procesados_solo = 0
+                alertas_dimensiones_solo, alertas_parejas_solo = [], []
+                
+                for fx in files_xlsx_originales:
+                    df_csv, fc_usado = None, None
+                    base_excel = simplificar_nombre(fx.name)
+                    
+                    for fc_cand in files_csv_finales:
+                        base_csv = simplificar_nombre(fc_cand.name)
+                        if base_excel == base_csv or base_excel in base_csv or base_csv in base_excel:
+                            df_csv = pd.read_csv(io.BytesIO(fc_cand.getvalue()), encoding="utf-8", dtype=str)
+                            fc_usado = fc_cand
+                            break
+                    
+                    if df_csv is not None:
+                        # Leemos con pandas directo (más rápido porque no necesitamos openpyxl para pintar celdas)
+                        xls_a = pd.ExcelFile(io.BytesIO(fx.getvalue()))
+                        hojas_reales = [h for h in xls_a.sheet_names if h.strip().upper() == HOJA_ALTAS]
+                        if hojas_reales:
+                            df_excel_original = xls_a.parse(hojas_reales[0], dtype=str)
+                            
+                            # Normalizamos columnas
+                            nuevas_columnas = []
+                            for col in df_excel_original.columns:
+                                huella = normalizar_para_busqueda_t3(col)
+                                if huella in mapa_huellas_t3: nuevas_columnas.append(mapa_huellas_t3[huella])
+                                else: nuevas_columnas.append(col)
+                            df_excel_original.columns = nuevas_columnas
+                            
+                            df_excel_original = df_excel_original.dropna(how='all')
+                            df_csv = df_csv.dropna(how='all')
+                            
+                            if "Periodo" in df_excel_original.columns:
+                                df_excel_original = df_excel_original[df_excel_original["Periodo"].astype(str).str.strip() != ""]
+                            if "PERIODO" in df_csv.columns:
+                                df_csv = df_csv[df_csv["PERIODO"].astype(str).str.strip() != ""]
+                            
+                            df_excel_original, df_csv = df_excel_original.reset_index(drop=True), df_csv.reset_index(drop=True)
+                            
+                            if len(df_excel_original) != len(df_csv):
+                                alertas_dimensiones_solo.append(f"❌ Excel `{fx.name}` tiene **{len(df_excel_original)} filas**, CSV `{fc_usado.name}` tiene **{len(df_csv)} filas**.")
+                                continue
+                            
+                            df_nrc_pestana = df_excel_original.copy()
+                            mapeo_columnas = {"Periodo": "PERIODO", "Subject": "SUBJ", "Course": "COURSE", "Sección": "SECCION"}
+                            for col_ex, col_cs in mapeo_columnas.items():
+                                if col_ex in df_nrc_pestana.columns and col_cs in df_csv.columns:
+                                    if col_ex == "Sección": df_nrc_pestana[col_ex] = pd.to_numeric(df_csv[col_cs], errors='coerce').values
+                                    else: df_nrc_pestana[col_ex] = df_csv[col_cs].values
+                            
+                            llaves_cruce = (
+                                df_nrc_pestana["Periodo"].apply(limpiar_clave_texto) + "_" + 
+                                df_excel_original["Nivel"].apply(normalizar_para_cruce) + "_" + 
+                                df_nrc_pestana["Subject"].apply(normalizar_para_cruce) + "_" + 
+                                df_nrc_pestana["Course"].apply(limpiar_clave_texto) + "_" + 
+                                df_nrc_pestana["Sección"].apply(str).apply(limpia_seccion_interna)
+                            )
+                            nrc_mapeados = llaves_cruce.map(mapa_nrcs)
+                            
+                            archivos_procesados_solo += 1
+                            for idx_row, row_ex in df_excel_original.iterrows():
+                                filas_para_cluster_solo.append({
+                                    "Periodo": row_ex.get("Periodo"), "CRN": nrc_mapeados.iloc[idx_row], 
+                                    "datocomplementario": row_ex.get("Clúster")
+                                })
+                    else:
+                        alertas_parejas_solo.append(f"⚠️ `{fx.name}` no encontró ningún CSV compatible.")
+
+                if filas_para_cluster_solo:
+                    df_parcial = pd.DataFrame(filas_para_cluster_solo)
+                    df_cluster_final = pd.DataFrame(index=df_parcial.index, columns=COLUMNAS_CLUSTER_FINAL)
+                    df_cluster_final["Periodo"] = df_parcial["Periodo"].apply(limpiar_clave_texto)
+                    df_cluster_final["CRN"] = df_parcial["CRN"] 
+                    df_cluster_final["datocomplementario"] = df_parcial["datocomplementario"].apply(limpiar_texto) if 'limpiar_texto' in globals() else df_parcial["datocomplementario"].apply(limpiar_clave_texto)
+                    
+                    for col in df_cluster_final.columns:
+                        df_cluster_final[col] = df_cluster_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
+                    
+                    st.session_state.cluster_solo_bytes = df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
+
+                if archivos_procesados_solo > 0:
+                    st.success(f"🎉 ¡Clúster generado exitosamente! Se leyeron {archivos_procesados_solo} archivos.")
+                else: st.error("❌ No se pudo procesar ningún archivo para el Clúster.")
+                
+                if alertas_dimensiones_solo:
+                    for alerta in alertas_dimensiones_solo: st.error(alerta)
+                if alertas_parejas_solo:
+                    for alerta in alertas_parejas_solo: st.warning(alerta)
+
+            except Exception as e:
+                st.error(f"❌ Ocurrió un inconveniente al generar solo el clúster: {str(e)}")
+
+    if st.session_state.get("cluster_solo_bytes"):
+        st.download_button(
+            label="📄 📥 DESCARGAR SOLO CLÚSTER (.CSV)", 
+            data=st.session_state.cluster_solo_bytes,
+            file_name="cluster_unificado.csv", 
+            mime="text/csv",
+            use_container_width=True, type="secondary"
         )
