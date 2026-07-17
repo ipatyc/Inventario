@@ -763,7 +763,6 @@ with tab3:
                         nuevas_columnas = []
                         for col in df_excel_original.columns:
                             huella = normalizar_para_busqueda_t3(col)
-                            # 🔥 Parche: Aseguramos encontrar la columna NRC o CRN venga como venga
                             if huella == "nrc" or huella == "crn": 
                                 nuevas_columnas.append("NRC")
                             elif huella in mapa_huellas_t3: 
@@ -772,6 +771,9 @@ with tab3:
                                 nuevas_columnas.append(col)
                         df_excel_original.columns = nuevas_columnas
                         
+                        # 🔥 EL PARCHE ANTI-ERROR: Eliminamos columnas duplicadas quedándonos con la primera
+                        df_excel_original = df_excel_original.loc[:, ~df_excel_original.columns.duplicated(keep='first')]
+                        
                         df_excel_original = df_excel_original.dropna(how='all')
                         
                         if "Periodo" in df_excel_original.columns:
@@ -779,7 +781,7 @@ with tab3:
                         
                         archivos_procesados_solo += 1
                         
-                        # 🔥 AHORA SÍ: Extraemos el NRC y el Clúster directo del Excel
+                        # Extraemos el NRC y el Clúster directo del Excel (ahora es 100% seguro)
                         for _, row_ex in df_excel_original.iterrows():
                             filas_para_cluster_solo.append({
                                 "Periodo": row_ex.get("Periodo", ""), 
