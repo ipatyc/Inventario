@@ -619,7 +619,6 @@ with tab3:
                                 
                                 df_excel_original = pd.DataFrame(data[1:], columns=[str(c).strip() if c is not None else "" for c in data[0]])
                                 
-                                # 🔥 EL PARCHE MÁGICO DE BÚSQUEDA EXTREMA EN PESTAÑA 3 🔥
                                 nuevas_columnas = []
                                 for col in df_excel_original.columns:
                                     huella = normalizar_para_busqueda_t3(col)
@@ -701,22 +700,26 @@ with tab3:
                         else:
                             alertas_parejas.append(f"⚠️ `{fx.name}` no encontró ningún CSV compatible.")
 
-                if filas_para_cluster_maestro:
-                    df_parcial = pd.DataFrame(filas_para_cluster_maestro)
-                    df_cluster_final = pd.DataFrame(index=df_parcial.index, columns=COLUMNAS_CLUSTER_FINAL)
-                    df_cluster_final["Periodo"] = df_parcial["Periodo"].apply(limpiar_clave_texto)
-                    df_cluster_final["CRN"] = df_parcial["CRN"] 
-                    df_cluster_final["datocomplementario"] = df_parcial["datocomplementario"].apply(limpiar_texto) if 'limpiar_texto' in globals() else df_parcial["datocomplementario"].apply(limpiar_clave_texto)
-                    
-                    for col in df_cluster_final.columns:
-                        df_cluster_final[col] = df_cluster_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
-                    
-                    zip_out.writestr("cluster_unificado.csv", df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8"))
+                    # 🔥 CORRECCIÓN ZIP: Este bloque ahora está adentro del 'with zipfile...'
+                    if filas_para_cluster_maestro:
+                        df_parcial = pd.DataFrame(filas_para_cluster_maestro)
+                        df_cluster_final = pd.DataFrame(index=df_parcial.index, columns=COLUMNAS_CLUSTER_FINAL)
+                        df_cluster_final["Periodo"] = df_parcial["Periodo"].apply(limpiar_clave_texto)
+                        df_cluster_final["CRN"] = df_parcial["CRN"] 
+                        df_cluster_final["datocomplementario"] = df_parcial["datocomplementario"].apply(limpiar_texto) if 'limpiar_texto' in globals() else df_parcial["datocomplementario"].apply(limpiar_clave_texto)
+                        
+                        for col in df_cluster_final.columns:
+                            df_cluster_final[col] = df_cluster_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
+                        
+                        zip_out.writestr("cluster_unificado.csv", df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8"))
 
+                # Ahora cerramos el ZIP sin problemas
                 if archivos_procesados_con_exito > 0:
                     st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
                     st.success(f"🎉 ¡Paquete final generado! Se procesaron {archivos_procesados_con_exito} archivos exitosamente.")
-                else: st.error("❌ No se pudo procesar ningún archivo.")
+                else: 
+                    st.error("❌ No se pudo procesar ningún archivo.")
+                
                 if alertas_dimensiones:
                     st.markdown("### 🚫 Archivos descartados por diferencia de filas:")
                     for alerta in alertas_dimensiones: st.error(alerta)
@@ -736,14 +739,14 @@ with tab3:
         )
 
 
-# ============================================================
-    # 👇 NUEVO PARCHE: SECCIÓN EXCLUSIVA PARA PURO CLÚSTER (JALANDO NRC DEL EXCEL)
+    # ============================================================
+    # 👇 SECCIÓN EXCLUSIVA PARA PURO CLÚSTER (JALANDO TODO DE LA PESTAÑA NRC)
     # ============================================================
     st.markdown("---")
     st.subheader("🧩 Extracción Exclusiva de Clúster")
-    st.markdown("Sube únicamente tus Excels (que ya contienen el NRC y Clúster). Se extraerá la información directo a la plantilla de 24 columnas.")
+    st.markdown("Sube tus Excels finales. El sistema extraerá el Periodo, NRC y Clúster directamente de la pestaña **NRC**.")
     
-    files_xlsx_solo = st.file_uploader("📁 Excels (con NRC y Clúster)", type=["xlsx"], accept_multiple_files=True, key="excels_solo")
+    files_xlsx_solo = st.file_uploader("📁 Excels (con pestaña NRC)", type=["xlsx"], accept_multiple_files=True, key="excels_solo")
     
     if files_xlsx_solo:
         if st.button("⚡ GENERAR SOLO CLÚSTER", type="secondary"):
@@ -752,16 +755,17 @@ with tab3:
                 archivos_procesados_solo = 0
                 
                 for fx in files_xlsx_solo:
-                    # Leemos con pandas directo (rapidísimo)
                     xls_a = pd.ExcelFile(io.BytesIO(fx.getvalue()))
-                    hojas_reales = [h for h in xls_a.sheet_names if h.strip().upper() == HOJA_ALTAS]
                     
-                    if hojas_reales:
-                        df_excel_original = xls_a.parse(hojas_reales[0], dtype=str)
+                    # Buscamos específicamente la pestaña NRC
+                    hojas_nrc = [h for h in xls_a.sheet_names if h.strip().upper() == HOJA_SALIDA_NRC.upper()]
+                    
+                    if hojas_nrc:
+                        df_nrc_sheet = xls_a.parse(hojas_nrc[0], dtype=str)
                         
-                        # Normalizamos columnas para encontrar "Periodo", "Clúster" y "NRC"
+                        # Normalizamos columnas
                         nuevas_columnas = []
-                        for col in df_excel_original.columns:
+                        for col in df_nrc_sheet.columns:
                             huella = normalizar_para_busqueda_t3(col)
                             if huella == "nrc" or huella == "crn": 
                                 nuevas_columnas.append("NRC")
@@ -769,20 +773,18 @@ with tab3:
                                 nuevas_columnas.append(mapa_huellas_t3[huella])
                             else: 
                                 nuevas_columnas.append(col)
-                        df_excel_original.columns = nuevas_columnas
+                        df_nrc_sheet.columns = nuevas_columnas
                         
-                        # 🔥 EL PARCHE ANTI-ERROR: Eliminamos columnas duplicadas quedándonos con la primera
-                        df_excel_original = df_excel_original.loc[:, ~df_excel_original.columns.duplicated(keep='first')]
+                        # Limpieza
+                        df_nrc_sheet = df_nrc_sheet.loc[:, ~df_nrc_sheet.columns.duplicated(keep='first')]
+                        df_nrc_sheet = df_nrc_sheet.dropna(how='all')
                         
-                        df_excel_original = df_excel_original.dropna(how='all')
-                        
-                        if "Periodo" in df_excel_original.columns:
-                            df_excel_original = df_excel_original[df_excel_original["Periodo"].astype(str).str.strip() != ""]
+                        if "Periodo" in df_nrc_sheet.columns:
+                            df_nrc_sheet = df_nrc_sheet[df_nrc_sheet["Periodo"].astype(str).str.strip() != ""]
                         
                         archivos_procesados_solo += 1
                         
-                        # Extraemos el NRC y el Clúster directo del Excel (ahora es 100% seguro)
-                        for _, row_ex in df_excel_original.iterrows():
+                        for _, row_ex in df_nrc_sheet.iterrows():
                             filas_para_cluster_solo.append({
                                 "Periodo": row_ex.get("Periodo", ""), 
                                 "CRN": row_ex.get("NRC", ""), 
@@ -803,9 +805,9 @@ with tab3:
                     st.session_state.cluster_solo_bytes = df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
 
                 if archivos_procesados_solo > 0:
-                    st.success(f"🎉 ¡Clúster generado exitosamente! Se extrajo información de {archivos_procesados_solo} archivos Excels.")
+                    st.success(f"🎉 ¡Clúster generado exitosamente! Se extrajeron datos de {archivos_procesados_solo} archivos desde la pestaña NRC.")
                 else: 
-                    st.error("❌ No se encontró la pestaña de ALTAS en los Excels subidos.")
+                    st.error(f"❌ No se encontró la pestaña '{HOJA_SALIDA_NRC}' en los Excels subidos.")
 
             except Exception as e:
                 st.error(f"❌ Ocurrió un inconveniente al generar solo el clúster: {str(e)}")
