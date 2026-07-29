@@ -778,7 +778,8 @@ with tab3:
                 alertas_parejas_solo = []
                 
                 # Formato de nombre: cluster_dd-mm-aa-hhmm.csv
-                fecha_str = datetime.datetime.now().strftime("%d-%m-%y-%H%M")
+                hora_mexico = datetime.datetime.utcnow() - datetime.timedelta(hours=6)
+                fecha_str = hora_mexico.strftime("%d-%m-%y-%H%M")
                 nombre_cluster_final = f"cluster_{fecha_str}.csv"
                 
                 def simplificar_nombre_solo(nombre):
