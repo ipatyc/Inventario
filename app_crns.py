@@ -545,7 +545,7 @@ with tab_err:
 # PESTAÑA 3: INYECCIÓN DE NRCS Y GENERACIÓN DE CLÚSTER
 # ============================================================
 with tab3:
-    import datetime # Importamos datetime para sacar la hora exacta
+    import datetime
     
     # --- INICIALIZAR MEMORIA PARA CLÚSTER SOLO ---
     if "cluster_solo_bytes" not in st.session_state: st.session_state.cluster_solo_bytes = None
@@ -616,6 +616,7 @@ with tab3:
                 filas_para_cluster_maestro = []
                 archivos_procesados_con_exito = 0
                 alertas_dimensiones, alertas_parejas = [], []
+                alertas_nrc_faltantes = []
                 
                 with zipfile.ZipFile(excels_inyectados_zip, "w", zipfile.ZIP_DEFLATED) as zip_out:
                     for fx in files_xlsx_originales:
@@ -683,7 +684,16 @@ with tab3:
                                     df_nrc_pestana["Course"].apply(ultra_limpiar) + "_" + 
                                     df_nrc_pestana["Sección"].apply(ultra_limpiar_seccion)
                                 )
-                                df_nrc_pestana.insert(0, "NRC", llaves_cruce.map(mapa_nrcs))
+                                
+                                nrc_mapeados = llaves_cruce.map(mapa_nrcs)
+                                
+                                # 🕵️‍♂️ DETECTOR DE LLAVES ROTAS
+                                faltantes = llaves_cruce[nrc_mapeados.isna()]
+                                if not faltantes.empty:
+                                    for llave_rota in faltantes.unique():
+                                        alertas_nrc_faltantes.append(f"Archivo `{fx.name}`: Excel buscó la llave **{llave_rota}** pero NO encontró una igual en ARGOS.")
+
+                                df_nrc_pestana.insert(0, "NRC", nrc_mapeados)
                                 
                                 if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
                                 ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
@@ -729,8 +739,8 @@ with tab3:
                         for col in df_cluster_final.columns:
                             df_cluster_final[col] = df_cluster_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
                         
-                        # 👇 NUEVO PARCHE: FECHA Y HORA AL CLÚSTER PRINCIPAL
-                        fecha_str = datetime.datetime.now().strftime("%d-%m-%y-%H%M")
+                        hora_mexico = datetime.datetime.utcnow() - datetime.timedelta(hours=6)
+                        fecha_str = hora_mexico.strftime("%d-%m-%y-%H%M")
                         nombre_cluster_main = f"cluster_{fecha_str}.csv"
                         zip_out.writestr(nombre_cluster_main, df_cluster_final.to_csv(**CSV_KWARGS_R).encode("utf-8"))
 
@@ -740,6 +750,18 @@ with tab3:
                 else: 
                     st.error("❌ No se pudo procesar ningún archivo.")
                 
+                # 🕵️‍♂️ MOSTRAR RESULTADOS DEL DETECTOR Y LOS RAYOS X
+                if alertas_nrc_faltantes:
+                    st.markdown("### 🔍 Radar de Llaves Rotas:")
+                    
+                    with st.expander("👀 RAYOS X: Ver las llaves que ARGOS sí tiene (Da clic aquí para abrir)"):
+                        st.markdown("Estas son algunas de las llaves reales que el programa logró leer de tu archivo ARGOS. **Búscales la diferencia (un nombre distinto de nivel, un cero que falta, etc.):**")
+                        st.write(list(mapa_nrcs.keys())[:30])
+                        
+                    st.warning("Las siguientes combinaciones del Excel no empataron con ninguna de las llaves de ARGOS que están arriba:")
+                    for alerta in alertas_nrc_faltantes:
+                        st.error(alerta)
+                        
                 if alertas_dimensiones:
                     st.markdown("### 🚫 Archivos descartados por diferencia de filas:")
                     for alerta in alertas_dimensiones: st.error(alerta)
@@ -760,7 +782,7 @@ with tab3:
 
 
     # ============================================================
-    # 👇 NUEVA VERSIÓN: SECCIÓN EXCLUSIVA (PIDE EXCEL + CSV Y PONE FECHA/HORA)
+    # 👇 SECCIÓN EXCLUSIVA PARA PURO CLÚSTER (PIDE EXCEL + CSV Y PONE FECHA/HORA)
     # ============================================================
     st.markdown("---")
     st.subheader("🧩 Extracción Exclusiva de Clúster")
@@ -777,7 +799,6 @@ with tab3:
                 archivos_procesados_solo = 0
                 alertas_parejas_solo = []
                 
-                # Formato de nombre: cluster_dd-mm-aa-hhmm.csv
                 hora_mexico = datetime.datetime.utcnow() - datetime.timedelta(hours=6)
                 fecha_str = hora_mexico.strftime("%d-%m-%y-%H%M")
                 nombre_cluster_final = f"cluster_{fecha_str}.csv"
@@ -792,7 +813,6 @@ with tab3:
                     base_excel = simplificar_nombre_solo(fx.name)
                     fc_usado = None
                     
-                    # Verificamos que el Excel tenga su pareja en CSV antes de extraer
                     for fc_cand in files_csv_solo:
                         base_csv = simplificar_nombre_solo(fc_cand.name)
                         if base_excel == base_csv or base_excel in base_csv or base_csv in base_excel:
@@ -801,7 +821,6 @@ with tab3:
                             
                     if fc_usado is not None:
                         xls_a = pd.ExcelFile(io.BytesIO(fx.getvalue()))
-                        
                         hojas_nrc = [h for h in xls_a.sheet_names if h.strip().upper() == HOJA_SALIDA_NRC.upper()]
                         
                         if hojas_nrc:
