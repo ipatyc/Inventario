@@ -695,12 +695,19 @@ with tab3:
                                 
                                 nrc_mapeados = llaves_cruce.map(mapa_nrcs)
                                 
-                                # 🕵️‍♂️ DETECTOR DE LLAVES ROTAS
+                               # 🕵️‍♂️ NUEVO PARCHE: DETECTOR DE LLAVES ROTAS CON RAYOS X
+                                nrc_mapeados = llaves_cruce.map(mapa_nrcs)
+                                
                                 faltantes = llaves_cruce[nrc_mapeados.isna()]
                                 if not faltantes.empty:
                                     for llave_rota in faltantes.unique():
                                         alertas_nrc_faltantes.append(f"Archivo `{fx.name}`: Excel buscó la llave **{llave_rota}** pero NO encontró una igual en ARGOS.")
-
+                                        
+                                        # 👇 ¡NUEVO! Muestra un ejemplo de cómo se ve esa llave en ARGOS para comparar
+                                        posibles_coincidencias = [k for k in mapa_nrcs.keys() if "EJECUTIVA" in k or "TAEG" in k]
+                                        if posibles_coincidencias:
+                                            alertas_nrc_faltantes.append(f"👉 *💡 Pista de ARGOS (lo más parecido que encontré fue):* `{posibles_coincidencias[:3]}`")
+                                            
                                 df_nrc_pestana.insert(0, "NRC", nrc_mapeados)
                                 
                                 if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
