@@ -594,9 +594,17 @@ with tab3:
                 col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
                 if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
 
-                # 🔥 APLICAMOS LA ULTRA-LIMPIEZA A ARGOS
+                # 👇 PARCHE MAESTRO: MATAMOS ACENTOS Y MAYÚSCULAS/MINÚSCULAS
+                def limpiar_nivel_total(x):
+                    if pd.isna(x): return ""
+                    # Quitamos acentos, espacios, pasamos a mayúsculas y quitamos el .0
+                    s = quitar_acentos(str(x)).strip().upper().replace(" ", "")
+                    if s.endswith(".0"): s = s[:-2]
+                    return s
+
+                # 🔥 APLICAMOS LA ULTRA-LIMPIEZA A ARGOS (Con limpiador especial de Nivel)
                 argos_df["Periodo"] = argos_df["Periodo"].apply(ultra_limpiar)
-                argos_df["Nivel"] = argos_df["Nivel"].apply(ultra_limpiar)
+                argos_df["Nivel"] = argos_df["Nivel"].apply(limpiar_nivel_total)
                 argos_df["Área"] = argos_df["Área"].apply(ultra_limpiar)
                 argos_df[col_curso] = argos_df[col_curso].apply(ultra_limpiar)
                 argos_df["Grupo"] = argos_df["Grupo"].apply(ultra_limpiar_seccion)
