@@ -589,22 +589,24 @@ with tab3:
                     if s.isdigit(): return f"{int(s):02d}" # Obliga a que sea 01, 02, 05...
                     return s
 
+                # 👇 TRADUCTOR INTELIGENTE DE NIVEL SEGÚN EL CLÚSTER
+                def corregir_nivel_por_cluster(row):
+                    cluster_val = str(row.get("Clúster", row.get("datocomplementario", ""))).strip().lower()
+                    if "posgrado" in cluster_val:
+                        return "POSGRADO"
+                    elif "bachillerato" in cluster_val:
+                        return "BACHILLERATO"
+                    else:
+                        return "LICENCIATURA"
+
                 argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip', dtype=str)
                 argos_df.columns = [re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) for c in argos_df.columns]
                 col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
                 if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
 
-                # 👇 PARCHE MAESTRO: MATAMOS ACENTOS Y MAYÚSCULAS/MINÚSCULAS
-                def limpiar_nivel_total(x):
-                    if pd.isna(x): return ""
-                    # Quitamos acentos, espacios, pasamos a mayúsculas y quitamos el .0
-                    s = quitar_acentos(str(x)).strip().upper().replace(" ", "")
-                    if s.endswith(".0"): s = s[:-2]
-                    return s
-
-                # 🔥 APLICAMOS LA ULTRA-LIMPIEZA A ARGOS (Con limpiador especial de Nivel)
+                # 🔥 APLICAMOS LA ULTRA-LIMPIEZA A ARGOS
                 argos_df["Periodo"] = argos_df["Periodo"].apply(ultra_limpiar)
-                argos_df["Nivel"] = argos_df["Nivel"].apply(limpiar_nivel_total)
+                argos_df["Nivel"] = argos_df["Nivel"].apply(ultra_limpiar)
                 argos_df["Área"] = argos_df["Área"].apply(ultra_limpiar)
                 argos_df[col_curso] = argos_df[col_curso].apply(ultra_limpiar)
                 argos_df["Grupo"] = argos_df["Grupo"].apply(ultra_limpiar_seccion)
@@ -684,10 +686,12 @@ with tab3:
                                 
                                 df_nrc_pestana["Grupos"], df_nrc_pestana["Socio de Integración"] = "1", "D2L"
                                 
-                                # 🔥 APLICAMOS LA ULTRA-LIMPIEZA AL EXCEL PARA EL CRUCE PERFECTO
+                                # 🔥 APLICAMOS LA TRADUCCIÓN DE NIVEL SEGÚN CLÚSTER Y LA ULTRA-LIMPIEZA
+                                nivel_corregido = df_excel_original.apply(corregir_nivel_por_cluster, axis=1).apply(ultra_limpiar)
+                                
                                 llaves_cruce = (
                                     df_nrc_pestana["Periodo"].apply(ultra_limpiar) + "_" + 
-                                    df_excel_original["Nivel"].apply(ultra_limpiar) + "_" + 
+                                    nivel_corregido + "_" + 
                                     df_nrc_pestana["Subject"].apply(ultra_limpiar) + "_" + 
                                     df_nrc_pestana["Course"].apply(ultra_limpiar) + "_" + 
                                     df_nrc_pestana["Sección"].apply(ultra_limpiar_seccion)
@@ -695,19 +699,12 @@ with tab3:
                                 
                                 nrc_mapeados = llaves_cruce.map(mapa_nrcs)
                                 
-                               # 🕵️‍♂️ NUEVO PARCHE: DETECTOR DE LLAVES ROTAS CON RAYOS X
-                                nrc_mapeados = llaves_cruce.map(mapa_nrcs)
-                                
+                                # 🕵️‍♂️ DETECTOR DE LLAVES ROTAS
                                 faltantes = llaves_cruce[nrc_mapeados.isna()]
                                 if not faltantes.empty:
                                     for llave_rota in faltantes.unique():
                                         alertas_nrc_faltantes.append(f"Archivo `{fx.name}`: Excel buscó la llave **{llave_rota}** pero NO encontró una igual en ARGOS.")
-                                        
-                                        # 👇 ¡NUEVO! Muestra un ejemplo de cómo se ve esa llave en ARGOS para comparar
-                                        posibles_coincidencias = [k for k in mapa_nrcs.keys() if "EJECUTIVA" in k or "TAEG" in k]
-                                        if posibles_coincidencias:
-                                            alertas_nrc_faltantes.append(f"👉 *💡 Pista de ARGOS (lo más parecido que encontré fue):* `{posibles_coincidencias[:3]}`")
-                                            
+
                                 df_nrc_pestana.insert(0, "NRC", nrc_mapeados)
                                 
                                 if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
@@ -765,15 +762,10 @@ with tab3:
                 else: 
                     st.error("❌ No se pudo procesar ningún archivo.")
                 
-                # 🕵️‍♂️ MOSTRAR RESULTADOS DEL DETECTOR Y LOS RAYOS X
                 if alertas_nrc_faltantes:
                     st.markdown("### 🔍 Radar de Llaves Rotas:")
-                    
-                    with st.expander("👀 RAYOS X: Ver las llaves que ARGOS sí tiene (Da clic aquí para abrir)"):
-                        st.markdown("Estas son algunas de las llaves reales que el programa logró leer de tu archivo ARGOS. **Búscales la diferencia (un nombre distinto de nivel, un cero que falta, etc.):**")
+                    with st.expander("👀 RAYOS X: Ver las llaves que ARGOS sí tiene"):
                         st.write(list(mapa_nrcs.keys())[:30])
-                        
-                    st.warning("Las siguientes combinaciones del Excel no empataron con ninguna de las llaves de ARGOS que están arriba:")
                     for alerta in alertas_nrc_faltantes:
                         st.error(alerta)
                         
@@ -797,7 +789,7 @@ with tab3:
 
 
     # ============================================================
-    # 👇 SECCIÓN EXCLUSIVA PARA PURO CLÚSTER (PIDE EXCEL + CSV Y PONE FECHA/HORA)
+    # 👇 SECCIÓN EXCLUSIVA PARA PURO CLÚSTER
     # ============================================================
     st.markdown("---")
     st.subheader("🧩 Extracción Exclusiva de Clúster")
