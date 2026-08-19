@@ -116,22 +116,23 @@ with tab1:
                 if k in st.session_state:
                     del st.session_state[k]
             st.rerun()
-    
+
     col1, col2 = st.columns(2)
     # 👇 NUEVO PARCHE: Agregamos 'key' a los uploaders para que el botón los pueda resetear
     with col1: file_cat = st.file_uploader("📑 Catálogo de Materias Estatales (Excel)", type=["xlsx"], key="file_cat_uploader")
     with col2: files_altas = st.file_uploader("📁 Archivos de ALTAS (Puedes subir varios Excel)", accept_multiple_files=True, type=["xlsx"], key="files_altas_uploader")
-    
+
     # 🔥 BÚSQUEDA EXTREMA: Función para encontrar huellas digitales de columnas (ignora acentos, símbolos, saltos y espacios)
     def normalizar_para_busqueda(texto):
         s = str(texto).lower()
         s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
         return re.sub(r'[^a-z0-9]', '', s)
-        
+
+    # 👇 CORRECCIÓN: Se agregó "Clúster" a las columnas esperadas
     columnas_esperadas = [
         "Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia",
         "Parte de Periodo", "Estatus", "Capacidad", "Sección", 
-        "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion"
+        "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"
     ]
     mapa_huellas = {normalizar_para_busqueda(col): col for col in columnas_esperadas}
 
@@ -139,35 +140,35 @@ with tab1:
         if st.button("⚡ Ejecutar Validación Inteligente", type="primary"):
             st.session_state.ready_for_download = False 
             st.toast("Cargando Catálogo de Materias...", icon="📑")
-            
+
             # 👇 NUEVO PARCHE: Función para fulminar espacios internos y externos en claves
             def sin_espacios(x):
                 v = format_r_string(x)
                 if pd.isna(v): return v
                 return str(v).replace(" ", "").upper()
-            
+
             xls_cat = pd.ExcelFile(file_cat)
             indice_cat, indice_cat_claves = {}, {} 
-            
+
             for hoja in xls_cat.sheet_names:
                 df_c = xls_cat.parse(hoja)
                 if "Nivel" in df_c.columns and "Materia" in df_c.columns:
                     for _, f in df_c.iterrows():
                         niv = normalizar_para_cruce(f.get("Nivel"))
                         mat_o = str(f.get("Materia")).strip()
-                        
+
                         # 🔥 Aplicamos el parche de espacios aquí (Catálogo)
                         s_val = sin_espacios(f.get("Subj"))
                         c_val = sin_espacios(f.get("Crse"))
-                        
+
                         indice_cat.setdefault(niv, []).append({
                             "mat_orig": mat_o, "mat_norm": normalizar_para_cruce(f.get("Materia")), 
                             "subj": s_val, "crse": c_val
                         })
-                        
+
                         if pd.notna(s_val) and pd.notna(c_val):
                             indice_cat_claves[(normalizar_para_cruce(s_val), c_val)] = mat_o
-            
+
             piezas = []
             for f in files_altas:
                 st.session_state.original_files_bytes[f.name] = f.getvalue()
@@ -175,7 +176,7 @@ with tab1:
                 hojas_reales = [h for h in xls_a.sheet_names if h.strip().upper() == HOJA_ALTAS]
                 if hojas_reales:
                     df_a = xls_a.parse(hojas_reales[0], dtype=str)
-                    
+
                     # 🔥 APLICAMOS LA BÚSQUEDA EXTREMA AQUÍ
                     # Mapeamos la columna sucia a tu nombre oficial para que tu código funcione perfecto abajo.
                     nuevas_columnas = []
@@ -186,32 +187,32 @@ with tab1:
                         else:
                             nuevas_columnas.append(col)
                     df_a.columns = nuevas_columnas
-                    
+
                     essential_cols = [c for c in ["Periodo", "Campus", "Subject", "Course"] if c in df_a.columns]
                     if essential_cols: df_a = df_a.dropna(subset=essential_cols, how="all")
                     df_a = df_a.dropna(how="all")
                     if not df_a.empty:
                         df_a["ArchivoOrigen"] = f.name
                         piezas.append(df_a)
-            
+
             if piezas:
                 df_total = pd.concat(piezas, ignore_index=True)
                 st.session_state.raw_altas = df_total.copy()
-                
+
                 resultados = []
                 for idx, fila in df_total.iterrows():
                     niv_n = normalizar_para_cruce(fila.get("Nivel"))
                     mat_excel_orig = fila.get("Nombre de la Materia")
                     mat_n = normalizar_para_cruce(mat_excel_orig)
-                    
+
                     # 🔥 Aplicamos el parche de espacios aquí (Excel Original)
                     subj_orig = sin_espacios(fila.get("Subject"))
                     crse_orig = sin_espacios(fila.get("Course"))
-                    
+
                     candidatos = indice_cat.get(niv_n, [])
                     matches_exactos = [c for c in candidatos if c["mat_norm"] == mat_n]
                     match_elegido = None
-                    
+
                     if matches_exactos:
                         coincidencia_perfecta = next((m for m in matches_exactos if m["subj"] == subj_orig and m["crse"] == crse_orig), None)
                         match_elegido = coincidencia_perfecta if coincidencia_perfecta else matches_exactos[0]
@@ -224,7 +225,7 @@ with tab1:
                             matches_fuzzy = [c for c in candidatos if c["mat_norm"] == mejor["mat_norm"]]
                             coincidencia_perf_f = next((m for m in matches_fuzzy if m["subj"] == subj_orig and m["crse"] == crse_orig), None)
                             match_elegido = coincidencia_perf_f if coincidencia_perf_f else mejor
-                    
+
                     if match_elegido:
                         subj_sug, crse_sug, mat_cat_nombre = match_elegido["subj"], match_elegido["crse"], match_elegido["mat_orig"]
                         if subj_orig == subj_sug and crse_orig == crse_sug: comentario = "Todo correcto"
@@ -238,7 +239,7 @@ with tab1:
                         else:
                             mat_cat_nombre, comentario = mat_excel_orig, "No se encontró en catálogo"
                         subj_sug, crse_sug = subj_orig, crse_orig
-                    
+
                     resultados.append({
                         "Luz Verde": False, "idx": idx, "Archivo": fila.get("ArchivoOrigen"), 
                         "Materia Excel": mat_excel_orig, "Materia Catálogo": mat_cat_nombre, 
@@ -246,7 +247,7 @@ with tab1:
                         "Subj Sugerido": subj_sug, "Crse Sugerido": crse_sug,
                         "Llave_Cruce": f"{fila.get('ArchivoOrigen')}|{mat_excel_orig}|{subj_orig}|{crse_orig}"
                     })
-                
+
                 st.session_state.res_auditoria = pd.DataFrame(resultados)
                 st.success("¡Revisión de catálogos finalizada!")
             else:
@@ -256,17 +257,17 @@ with tab1:
         st.markdown("### ⚖️ Mesa de Control Interactiva")
         df_aud = st.session_state.res_auditoria
         archivos_subidos = df_aud["Archivo"].unique()
-        
+
         for arch in archivos_subidos:
             df_file = df_aud[df_aud["Archivo"] == arch]
             errores_filas = df_file[df_file["Comentario"] != "Todo correcto"]
             total_detalles = len(errores_filas)
-            
+
             if total_detalles == 0:
                 st.success(f"✅ **{arch}** — ¡Todo limpio, listo para procesar!")
             else:
                 with st.expander(f"⚠️ **{arch}** — ({total_detalles} advertencias detectadas)", expanded=True):
-                    
+
                     col_btn1, col_btn2 = st.columns([1, 2])
                     with col_btn1:
                         if st.button("✅ Seleccionar Todo", key=f"sel_all_{arch}"):
@@ -274,10 +275,10 @@ with tab1:
                             st.rerun()
                     with col_btn2:
                         quitar_rep = st.checkbox("🔍 Agrupar repetidas", value=True, key=f"rep_{arch}")
-                    
+
                     df_vista = errores_filas.drop_duplicates(subset=["Llave_Cruce"]) if quitar_rep else errores_filas
                     columnas_vista = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
-                    
+
                     with st.form(key=f"form_{arch}"):
                         st.markdown("👇 **Selecciona todas las casillas que quieras (ya no se recargará la página) y luego da clic en Confirmar.**")
                         df_editado_archivo = st.data_editor(
@@ -288,93 +289,107 @@ with tab1:
                             key=f"editor_{arch}",
                             use_container_width=True
                         )
-                        
+
                         btn_guardar = st.form_submit_button("💾 Confirmar Selección")
-                        
+
                         if btn_guardar:
                             df_editado_idx = df_editado_archivo.copy()
                             df_editado_idx["Llave_Cruce"] = arch + "|" + df_editado_idx["Materia Excel"] + "|" + df_editado_idx["Subj Original"] + "|" + df_editado_idx["Crse Original"]
-                            
+
                             df_master = st.session_state.res_auditoria.copy()
                             df_master.set_index("Llave_Cruce", inplace=True)
                             df_editado_idx.set_index("Llave_Cruce", inplace=True)
-                            
+
                             df_master.update(df_editado_idx[["Luz Verde", "Subj Sugerido", "Crse Sugerido"]])
                             st.session_state.res_auditoria = df_master.reset_index()
                             st.rerun()
-        
+
         st.markdown("---")
         if st.button("💾 Generar Bloque de Archivos CSV", type="primary"):
             corregido = st.session_state.raw_altas.copy()
-            
+
             if "Subject" in corregido.columns: corregido["Subject"] = corregido["Subject"].astype(str)
             if "Course" in corregido.columns: corregido["Course"] = corregido["Course"].astype(str)
-            
+
             for _, row in st.session_state.res_auditoria.iterrows():
                 if row["Luz Verde"] and pd.notna(row["Subj Sugerido"]):
                     corregido.loc[row["idx"], "Subject"] = str(row["Subj Sugerido"])
                     corregido.loc[row["idx"], "Course"] = str(row["Crse Sugerido"])
-            
+
             st.session_state.csv_files_to_download = {}
             zip_buffer = io.BytesIO()
             errores_encontrados = False
-            
+
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for name, sub in corregido.groupby("ArchivoOrigen"):
-                    
-                    # Verificamos si logramos encontrar las requeridas antes de crear el CSV
+
+                    # 👇 CORRECCIÓN: Se agregaron "Nivel" y "Clúster" a las requeridas
                     columnas_requeridas_csv = [
-                        "Periodo", "Campus", "Subject", "Course", 
+                        "Periodo", "Campus", "Subject", "Course", "Nivel", 
                         "Parte de Periodo", "Estatus", "Capacidad", 
                         "Sección", "Tipo de Horario", "Método Educativo", 
-                        "Modo de Calificar", "Sesion"
+                        "Modo de Calificar", "Sesion", "Clúster"
                     ]
-                    
+
                     faltantes = [c for c in columnas_requeridas_csv if c not in sub.columns]
                     if faltantes:
                         st.error(f"❌ **Error en `{name}`**: No se encontró la información para: **{', '.join(faltantes)}**.\n*(Incluso buscando ignorando acentos, símbolos y espacios).*")
                         errores_encontrados = True
                         continue
-                    
+
                     # 🔥 TU CÓDIGO ORIGINAL INTACTO + PARCHE AL GENERAR CSV 🔥
                     resultado_df = pd.DataFrame()
                     resultado_df["PERIODO"] = sub["Periodo"].apply(format_r_string)
                     resultado_df["SEDE"] = sub["Campus"].apply(format_r_string)
-                    
+
                     # 👇 NUEVO PARCHE: Fulmina espacios de las claves para que bajen limpios
                     resultado_df["SUBJ"] = sub["Subject"].apply(lambda x: str(format_r_string(x)).replace(" ", "").upper() if pd.notna(format_r_string(x)) else np.nan)
                     resultado_df["COURSE"] = sub["Course"].apply(lambda x: str(format_r_string(x)).replace(" ", "").upper() if pd.notna(format_r_string(x)) else np.nan)
-                    
+
                     resultado_df["PARTEPERIODO"] = sub["Parte de Periodo"].apply(format_r_string)
                     resultado_df["STATUS"] = sub["Estatus"].apply(format_r_string)
-                    
+
                     resultado_df["CAPACIDAD"] = pd.to_numeric(sub["Capacidad"], errors='coerce').astype('Int64')
                     resultado_df["GRUPOS"] = pd.Series(1, index=resultado_df.index, dtype="Int64")
                     resultado_df["SECCION"] = pd.to_numeric(sub["Sección"], errors='coerce').astype('Int64')
-                    
+
                     resultado_df["TIPODEHORARIO"] = sub["Tipo de Horario"].apply(format_r_string)
                     resultado_df["METODO_EDUCATIVO"] = sub["Método Educativo"].apply(format_r_string)
                     resultado_df["SOCIODEINTEGRACION"] = "D2L"
                     resultado_df["MODODECALIFICAR"] = sub["Modo de Calificar"].apply(format_r_string)
                     resultado_df["SESION"] = sub["Sesion"].apply(format_r_string)
-                    
+
+                    # 👇 NUEVO: Función condicional para el Clúster
+                    def aplicar_reglas_cluster(fila):
+                        nivel_actual = str(fila.get("Nivel", "")).strip().upper()
+                        cluster_excel = format_r_string(fila.get("Clúster"))
+                        
+                        if "BACHILLERATO" in nivel_actual:
+                            return "BACHILLERATO"
+                        
+                        return cluster_excel
+
+                    resultado_df["datocomplementario"] = sub.apply(aplicar_reglas_cluster, axis=1)
+
+                    # 👇 CORRECCIÓN: datocomplementario se agregó al final del orden
                     columnas_ordenadas = [
                         "PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS",
                         "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO",
-                        "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION"
+                        "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION",
+                        "datocomplementario"
                     ]
                     resultado_df = resultado_df[columnas_ordenadas]
-                    
+
                     # 🔥 HIGIENE ESTRICTA BANNER 🔥
                     for col in resultado_df.columns:
                         resultado_df[col] = resultado_df[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
-                    
+
                     csv_filename = f"{name.rsplit('.', 1)[0] if '.' in name else name}.csv"
                     csv_string = resultado_df.to_csv(**CSV_KWARGS_R)
-                    
+
                     zip_file.writestr(csv_filename, csv_string.encode('utf-8'))
                     st.session_state.csv_files_to_download[csv_filename] = csv_string.encode('utf-8')
-            
+
             if not errores_encontrados:
                 st.session_state.zip_file_bytes = zip_buffer.getvalue()
                 st.session_state.ready_for_download = True
@@ -388,7 +403,6 @@ with tab1:
                 file_name="archivos_carga_banner.zip", 
                 mime="application/zip", use_container_width=True, type="primary"
             )
-
 
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
