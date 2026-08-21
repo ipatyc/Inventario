@@ -618,6 +618,7 @@ with tab_err:
 # ============================================================
 with tab3:
     import datetime
+    import difflib # 🔥 NUEVO: Necesario para buscar la llave más parecida
     
     # --- INICIALIZAR MEMORIA ---
     if "df_cruce_rapido" not in st.session_state: st.session_state.df_cruce_rapido = None
@@ -700,6 +701,7 @@ with tab3:
                                                 argos_df["Área"] + "_" + argos_df[col_curso] + "_" + argos_df["Grupo"])
                     argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
                     mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
+                    llaves_argos_disponibles = list(mapa_nrcs.keys()) # 🔥 Para buscar el match parecido
 
                     excels_inyectados_zip = io.BytesIO()
                     archivos_procesados_con_exito = 0
@@ -780,16 +782,14 @@ with tab3:
                                     
                                     nrc_mapeados = llaves_cruce.map(mapa_nrcs)
                                     
-                                    # Radar de errores detallado
+                                    # 👇 NUEVO: Mostrar las 2 llaves frente a frente
                                     faltantes = llaves_cruce[nrc_mapeados.isna()]
                                     if not faltantes.empty:
                                         llaves_unicas_rotas = faltantes.unique()
                                         for llave_rota in llaves_unicas_rotas:
-                                            partes = str(llave_rota).split("_")
-                                            motivo = ""
-                                            if len(partes) == 5:
-                                                motivo = f" *(Revisa si ARGOS tiene Nivel: {partes[1]}, o si Grupo {partes[4]} no coincide)*"
-                                            alertas_nrc_faltantes.append(f"Archivo `{fx.name}`: Falla en {llave_rota}{motivo}")
+                                            sugerencias = difflib.get_close_matches(str(llave_rota), llaves_argos_disponibles, n=1, cutoff=0.6)
+                                            sugerencia_txt = f"👉 En ARGOS lo más parecido es: **{sugerencias[0]}**" if sugerencias else "👉 (No se encontró nada parecido en ARGOS)"
+                                            alertas_nrc_faltantes.append(f"❌ `{fx.name}` buscó: **{llave_rota}** \n{sugerencia_txt}")
 
                                     df_nrc_pestana.insert(0, "NRC", nrc_mapeados)
                                     
@@ -829,7 +829,7 @@ with tab3:
                         st.error("❌ No se pudo procesar ningún archivo.")
                     
                     if alertas_nrc_faltantes:
-                        st.markdown("### 🔍 Radar de Llaves Rotas (Por qué falló el Match):")
+                        st.markdown("### 🔍 Radar de Llaves Rotas (Comparación Frente a Frente):")
                         for alerta in alertas_nrc_faltantes: st.error(alerta)
                             
                     if alertas_dimensiones:
@@ -879,6 +879,7 @@ with tab3:
                                                 argos_df["Área"] + "_" + argos_df[col_curso] + "_" + argos_df["Grupo"])
                     argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
                     mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
+                    llaves_argos_disponibles = list(mapa_nrcs.keys()) # 🔥 Para buscar el match parecido
                     
                     # 2. Leer CSVs y armar tabla final
                     dfs_combinados = []
@@ -902,10 +903,13 @@ with tab3:
                         # Mapear NRC
                         nrc_asignados = llaves_csv.map(mapa_nrcs)
                         
-                        # Radar de errores
+                        # 👇 NUEVO: Mostrar las 2 llaves frente a frente
                         faltantes = llaves_csv[nrc_asignados.isna()]
-                        for llave_rota in faltantes.unique():
-                            alertas_nrc_rapido.append(f"No se encontró match en ARGOS para la llave: {llave_rota}")
+                        if not faltantes.empty:
+                            for llave_rota in faltantes.unique():
+                                sugerencias = difflib.get_close_matches(str(llave_rota), llaves_argos_disponibles, n=1, cutoff=0.6)
+                                sugerencia_txt = f"👉 En ARGOS lo más parecido es: **{sugerencias[0]}**" if sugerencias else "👉 (No se encontró nada parecido)"
+                                alertas_nrc_rapido.append(f"❌ Buscó: **{llave_rota}** \n{sugerencia_txt}")
                             
                         # Insertar NRC al principio
                         df_c.insert(0, "NRC", nrc_asignados)
@@ -928,8 +932,8 @@ with tab3:
                         st.success("✅ ¡Tabla cruzada generada exitosamente!")
                         
                         if alertas_nrc_rapido:
-                            st.warning("⚠️ Ojo: Algunas filas no encontraron su NRC.")
-                            with st.expander("Ver filas sin Match"):
+                            st.warning("⚠️ Ojo: Algunas filas no encontraron su NRC. Revisa las discrepancias abajo:")
+                            with st.expander("🔍 Ver llaves que no cruzaron (Frente a Frente)"):
                                 for a in alertas_nrc_rapido: st.write(a)
                     else:
                         st.error("No se pudo procesar la información de los CSV.")
