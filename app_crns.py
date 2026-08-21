@@ -618,7 +618,7 @@ with tab_err:
 # ============================================================
 with tab3:
     import datetime
-    import difflib # 🔥 NUEVO: Necesario para buscar la llave más parecida
+    import difflib
     
     # --- INICIALIZAR MEMORIA ---
     if "df_cruce_rapido" not in st.session_state: st.session_state.df_cruce_rapido = None
@@ -650,7 +650,7 @@ with tab3:
         if pd.isna(x): return ""
         s = str(x).strip().upper().replace(" ", "")
         if s.endswith(".0"): s = s[:-2]
-        if s.isdigit(): return f"{int(s):02d}" # Obliga a que sea 01, 02, 05...
+        if s.isdigit(): return f"{int(s):02d}"
         return s
 
     def corregir_nivel_por_cluster_csv(cluster_val):
@@ -690,18 +690,32 @@ with tab3:
                     col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
                     if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
 
+                    # 🔥 Identificar la columna de Clúster en ARGOS (buscando similitudes de nombre)
+                    col_argos_cluster = next((c for c in argos_df.columns if "cluster" in normalizar_para_busqueda_t3(c) or "complementario" in normalizar_para_busqueda_t3(c) or "area" in normalizar_para_busqueda_t3(c)), None)
+
                     # 🔥 APLICAMOS LA ULTRA-LIMPIEZA A ARGOS
                     argos_df["Periodo"] = argos_df["Periodo"].apply(ultra_limpiar)
                     argos_df["Nivel"] = argos_df["Nivel"].apply(ultra_limpiar)
-                    argos_df["Área"] = argos_df["Área"].apply(ultra_limpiar)
+                    if col_argos_cluster:
+                        argos_df[col_argos_cluster] = argos_df[col_argos_cluster].apply(ultra_limpiar)
+                    else:
+                        argos_df["_temp_cluster"] = ""
+                        col_argos_cluster = "_temp_cluster"
+                        
                     argos_df[col_curso] = argos_df[col_curso].apply(ultra_limpiar)
                     argos_df["Grupo"] = argos_df["Grupo"].apply(ultra_limpiar_seccion)
                     
-                    argos_df["_llave_argos"] = (argos_df["Periodo"] + "_" + argos_df["Nivel"] + "_" + 
-                                                argos_df["Área"] + "_" + argos_df[col_curso] + "_" + argos_df["Grupo"])
+                    # LLAVE DE ARGOS INCLUYENDO CLÚSTER
+                    argos_df["_llave_argos"] = (
+                        argos_df["Periodo"] + "_" + 
+                        argos_df["Nivel"] + "_" + 
+                        argos_df[col_argos_cluster] + "_" + 
+                        argos_df[col_curso] + "_" + 
+                        argos_df["Grupo"]
+                    )
                     argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
                     mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
-                    llaves_argos_disponibles = list(mapa_nrcs.keys()) # 🔥 Para buscar el match parecido
+                    llaves_argos_disponibles = list(mapa_nrcs.keys())
 
                     excels_inyectados_zip = io.BytesIO()
                     archivos_procesados_con_exito = 0
@@ -766,15 +780,16 @@ with tab3:
                                     
                                     df_nrc_pestana["Grupos"], df_nrc_pestana["Socio de Integración"] = "1", "D2L"
                                     
-                                    # Leemos datocomplementario del CSV para inferir el Nivel correcto
-                                    if "datocomplementario" in df_csv.columns:
-                                        nivel_corregido = df_csv["datocomplementario"].apply(corregir_nivel_por_cluster_csv).apply(ultra_limpiar)
-                                    else:
-                                        nivel_corregido = df_excel_original["Clúster"].apply(corregir_nivel_por_cluster_csv).apply(ultra_limpiar)
+                                    # Extraer Clúster y Nivel corregido
+                                    cluster_csv_series = df_csv["datocomplementario"] if "datocomplementario" in df_csv.columns else pd.Series([""] * len(df_csv))
+                                    nivel_corregido = cluster_csv_series.apply(corregir_nivel_por_cluster_csv).apply(ultra_limpiar)
+                                    cluster_limpio_csv = cluster_csv_series.apply(ultra_limpiar)
                                     
+                                    # LLAVE DE CRUCE DESDE EL CSV INCLUYENDO CLÚSTER
                                     llaves_cruce = (
                                         df_nrc_pestana["Periodo"].apply(ultra_limpiar) + "_" + 
                                         nivel_corregido + "_" + 
+                                        cluster_limpio_csv + "_" + 
                                         df_nrc_pestana["Subject"].apply(ultra_limpiar) + "_" + 
                                         df_nrc_pestana["Course"].apply(ultra_limpiar) + "_" + 
                                         df_nrc_pestana["Sección"].apply(ultra_limpiar_seccion)
@@ -782,12 +797,10 @@ with tab3:
                                     
                                     nrc_mapeados = llaves_cruce.map(mapa_nrcs)
                                     
-                                    # 👇 NUEVO: Mostrar las 2 llaves frente a frente
                                     faltantes = llaves_cruce[nrc_mapeados.isna()]
                                     if not faltantes.empty:
-                                        llaves_unicas_rotas = faltantes.unique()
-                                        for llave_rota in llaves_unicas_rotas:
-                                            sugerencias = difflib.get_close_matches(str(llave_rota), llaves_argos_disponibles, n=1, cutoff=0.6)
+                                        for llave_rota in faltantes.unique():
+                                            sugerencias = difflib.get_close_matches(str(llave_rota), llaves_argos_disponibles, n=1, cutoff=0.5)
                                             sugerencia_txt = f"👉 En ARGOS lo más parecido es: **{sugerencias[0]}**" if sugerencias else "👉 (No se encontró nada parecido en ARGOS)"
                                             alertas_nrc_faltantes.append(f"❌ `{fx.name}` buscó: **{llave_rota}** \n{sugerencia_txt}")
 
@@ -869,17 +882,29 @@ with tab3:
                     col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
                     if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
 
+                    col_argos_cluster = next((c for c in argos_df.columns if "cluster" in normalizar_para_busqueda_t3(c) or "complementario" in normalizar_para_busqueda_t3(c) or "area" in normalizar_para_busqueda_t3(c)), None)
+
                     argos_df["Periodo"] = argos_df["Periodo"].apply(ultra_limpiar)
                     argos_df["Nivel"] = argos_df["Nivel"].apply(ultra_limpiar)
-                    argos_df["Área"] = argos_df["Área"].apply(ultra_limpiar)
+                    if col_argos_cluster:
+                        argos_df[col_argos_cluster] = argos_df[col_argos_cluster].apply(ultra_limpiar)
+                    else:
+                        argos_df["_temp_cluster"] = ""
+                        col_argos_cluster = "_temp_cluster"
+                        
                     argos_df[col_curso] = argos_df[col_curso].apply(ultra_limpiar)
                     argos_df["Grupo"] = argos_df["Grupo"].apply(ultra_limpiar_seccion)
                     
-                    argos_df["_llave_argos"] = (argos_df["Periodo"] + "_" + argos_df["Nivel"] + "_" + 
-                                                argos_df["Área"] + "_" + argos_df[col_curso] + "_" + argos_df["Grupo"])
+                    argos_df["_llave_argos"] = (
+                        argos_df["Periodo"] + "_" + 
+                        argos_df["Nivel"] + "_" + 
+                        argos_df[col_argos_cluster] + "_" + 
+                        argos_df[col_curso] + "_" + 
+                        argos_df["Grupo"]
+                    )
                     argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
                     mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
-                    llaves_argos_disponibles = list(mapa_nrcs.keys()) # 🔥 Para buscar el match parecido
+                    llaves_argos_disponibles = list(mapa_nrcs.keys())
                     
                     # 2. Leer CSVs y armar tabla final
                     dfs_combinados = []
@@ -889,38 +914,36 @@ with tab3:
                         df_c = pd.read_csv(io.BytesIO(fc.getvalue()), encoding="utf-8", dtype=str)
                         df_c = df_c.dropna(how='all')
                         
-                        # Armar llave de cruce
-                        nivel_csv = df_c["datocomplementario"].apply(corregir_nivel_por_cluster_csv).apply(ultra_limpiar) if "datocomplementario" in df_c.columns else "LICENCIATURA"
+                        cluster_csv_series = df_c["datocomplementario"] if "datocomplementario" in df_c.columns else pd.Series([""] * len(df_c))
+                        nivel_csv = cluster_csv_series.apply(corregir_nivel_por_cluster_csv).apply(ultra_limpiar)
+                        cluster_limpio_csv = cluster_csv_series.apply(ultra_limpiar)
                         
+                        # LLAVE DE CRUCE DESDE EL CSV INCLUYENDO CLÚSTER
                         llaves_csv = (
                             df_c.get("PERIODO", pd.Series(dtype=str)).apply(ultra_limpiar) + "_" + 
                             nivel_csv + "_" + 
+                            cluster_limpio_csv + "_" + 
                             df_c.get("SUBJ", pd.Series(dtype=str)).apply(ultra_limpiar) + "_" + 
                             df_c.get("COURSE", pd.Series(dtype=str)).apply(ultra_limpiar) + "_" + 
                             df_c.get("SECCION", pd.Series(dtype=str)).apply(ultra_limpiar_seccion)
                         )
                         
-                        # Mapear NRC
                         nrc_asignados = llaves_csv.map(mapa_nrcs)
                         
-                        # 👇 NUEVO: Mostrar las 2 llaves frente a frente
                         faltantes = llaves_csv[nrc_asignados.isna()]
                         if not faltantes.empty:
                             for llave_rota in faltantes.unique():
-                                sugerencias = difflib.get_close_matches(str(llave_rota), llaves_argos_disponibles, n=1, cutoff=0.6)
+                                sugerencias = difflib.get_close_matches(str(llave_rota), llaves_argos_disponibles, n=1, cutoff=0.5)
                                 sugerencia_txt = f"👉 En ARGOS lo más parecido es: **{sugerencias[0]}**" if sugerencias else "👉 (No se encontró nada parecido)"
                                 alertas_nrc_rapido.append(f"❌ Buscó: **{llave_rota}** \n{sugerencia_txt}")
                             
-                        # Insertar NRC al principio
                         df_c.insert(0, "NRC", nrc_asignados)
                         
-                        # Renombrar columnas para la estética solicitada
                         df_c = df_c.rename(columns={
                             "TIPODEHORARIO": "TIPO DE HORARIO",
                             "METODO_EDUCATIVO": "METODO_ED"
                         })
                         
-                        # Filtrar estrictamente las columnas necesarias
                         columnas_deseadas = ["NRC", "PERIODO", "SUBJ", "COURSE", "CAPACIDAD", "SECCION", "TIPO DE HORARIO", "METODO_ED", "datocomplementario"]
                         columnas_finales = [c for c in columnas_deseadas if c in df_c.columns]
                         
@@ -941,7 +964,6 @@ with tab3:
                 except Exception as e:
                     st.error(f"❌ Ocurrió un error en el cruce rápido: {str(e)}")
 
-        # Mostrar tabla para copiar y botón para descargar en Excel
         if st.session_state.df_cruce_rapido is not None:
             st.markdown("### 📋 Resultados (Selecciona y copia la tabla o descárgala)")
             st.dataframe(st.session_state.df_cruce_rapido, use_container_width=True)
