@@ -687,30 +687,31 @@ with tab3:
                 try:
                     argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip', dtype=str)
                     argos_df.columns = [re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) for c in argos_df.columns]
-                    col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
-                    if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
+                    
+                    # 🔥 Búsqueda exacta de las 3 columnas en ARGOS
+                    col_argos_cluster = next((c for c in argos_df.columns if "cluster" in normalizar_para_busqueda_t3(c)), None)
+                    col_argos_area = next((c for c in argos_df.columns if "area" in normalizar_para_busqueda_t3(c)), None)
+                    col_argos_curso = next((c for c in argos_df.columns if "curso" in normalizar_para_busqueda_t3(c)), None)
 
-                    # 🔥 Identificar la columna de Clúster en ARGOS (buscando similitudes de nombre)
-                    col_argos_cluster = next((c for c in argos_df.columns if "cluster" in normalizar_para_busqueda_t3(c) or "complementario" in normalizar_para_busqueda_t3(c) or "area" in normalizar_para_busqueda_t3(c)), None)
+                    if not col_argos_cluster: raise KeyError("No se encontró la columna de Cluster en ARGOS.")
+                    if not col_argos_area: raise KeyError("No se encontró la columna de Área en ARGOS.")
+                    if not col_argos_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
 
                     # 🔥 APLICAMOS LA ULTRA-LIMPIEZA A ARGOS
                     argos_df["Periodo"] = argos_df["Periodo"].apply(ultra_limpiar)
                     argos_df["Nivel"] = argos_df["Nivel"].apply(ultra_limpiar)
-                    if col_argos_cluster:
-                        argos_df[col_argos_cluster] = argos_df[col_argos_cluster].apply(ultra_limpiar)
-                    else:
-                        argos_df["_temp_cluster"] = ""
-                        col_argos_cluster = "_temp_cluster"
-                        
-                    argos_df[col_curso] = argos_df[col_curso].apply(ultra_limpiar)
+                    argos_df[col_argos_cluster] = argos_df[col_argos_cluster].apply(ultra_limpiar)
+                    argos_df[col_argos_area] = argos_df[col_argos_area].apply(ultra_limpiar)
+                    argos_df[col_argos_curso] = argos_df[col_argos_curso].apply(ultra_limpiar)
                     argos_df["Grupo"] = argos_df["Grupo"].apply(ultra_limpiar_seccion)
                     
-                    # LLAVE DE ARGOS INCLUYENDO CLÚSTER
+                    # LLAVE DE ARGOS INCLUYENDO CLÚSTER Y ÁREA
                     argos_df["_llave_argos"] = (
                         argos_df["Periodo"] + "_" + 
                         argos_df["Nivel"] + "_" + 
                         argos_df[col_argos_cluster] + "_" + 
-                        argos_df[col_curso] + "_" + 
+                        argos_df[col_argos_area] + "_" + 
+                        argos_df[col_argos_curso] + "_" + 
                         argos_df["Grupo"]
                     )
                     argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
@@ -785,7 +786,7 @@ with tab3:
                                     nivel_corregido = cluster_csv_series.apply(corregir_nivel_por_cluster_csv).apply(ultra_limpiar)
                                     cluster_limpio_csv = cluster_csv_series.apply(ultra_limpiar)
                                     
-                                    # LLAVE DE CRUCE DESDE EL CSV INCLUYENDO CLÚSTER
+                                    # LLAVE DE CRUCE DESDE EL CSV INCLUYENDO CLÚSTER Y ÁREA (Subject)
                                     llaves_cruce = (
                                         df_nrc_pestana["Periodo"].apply(ultra_limpiar) + "_" + 
                                         nivel_corregido + "_" + 
@@ -879,27 +880,30 @@ with tab3:
                     # 1. Preparar Diccionario de ARGOS
                     argos_df = pd.read_csv(file_argos_rap, encoding="utf-8", on_bad_lines='skip', dtype=str)
                     argos_df.columns = [re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) for c in argos_df.columns]
-                    col_curso = next((c for c in argos_df.columns if "Curso" in c), None)
-                    if not col_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
+                    
+                    # 🔥 Búsqueda exacta de las 3 columnas en ARGOS
+                    col_argos_cluster = next((c for c in argos_df.columns if "cluster" in normalizar_para_busqueda_t3(c)), None)
+                    col_argos_area = next((c for c in argos_df.columns if "area" in normalizar_para_busqueda_t3(c)), None)
+                    col_argos_curso = next((c for c in argos_df.columns if "curso" in normalizar_para_busqueda_t3(c)), None)
 
-                    col_argos_cluster = next((c for c in argos_df.columns if "cluster" in normalizar_para_busqueda_t3(c) or "complementario" in normalizar_para_busqueda_t3(c) or "area" in normalizar_para_busqueda_t3(c)), None)
+                    if not col_argos_cluster: raise KeyError("No se encontró la columna de Cluster en ARGOS.")
+                    if not col_argos_area: raise KeyError("No se encontró la columna de Área en ARGOS.")
+                    if not col_argos_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
 
                     argos_df["Periodo"] = argos_df["Periodo"].apply(ultra_limpiar)
                     argos_df["Nivel"] = argos_df["Nivel"].apply(ultra_limpiar)
-                    if col_argos_cluster:
-                        argos_df[col_argos_cluster] = argos_df[col_argos_cluster].apply(ultra_limpiar)
-                    else:
-                        argos_df["_temp_cluster"] = ""
-                        col_argos_cluster = "_temp_cluster"
-                        
-                    argos_df[col_curso] = argos_df[col_curso].apply(ultra_limpiar)
+                    argos_df[col_argos_cluster] = argos_df[col_argos_cluster].apply(ultra_limpiar)
+                    argos_df[col_argos_area] = argos_df[col_argos_area].apply(ultra_limpiar)
+                    argos_df[col_argos_curso] = argos_df[col_argos_curso].apply(ultra_limpiar)
                     argos_df["Grupo"] = argos_df["Grupo"].apply(ultra_limpiar_seccion)
                     
+                    # LLAVE DE ARGOS INCLUYENDO CLÚSTER Y ÁREA
                     argos_df["_llave_argos"] = (
                         argos_df["Periodo"] + "_" + 
                         argos_df["Nivel"] + "_" + 
                         argos_df[col_argos_cluster] + "_" + 
-                        argos_df[col_curso] + "_" + 
+                        argos_df[col_argos_area] + "_" + 
+                        argos_df[col_argos_curso] + "_" + 
                         argos_df["Grupo"]
                     )
                     argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
@@ -918,7 +922,7 @@ with tab3:
                         nivel_csv = cluster_csv_series.apply(corregir_nivel_por_cluster_csv).apply(ultra_limpiar)
                         cluster_limpio_csv = cluster_csv_series.apply(ultra_limpiar)
                         
-                        # LLAVE DE CRUCE DESDE EL CSV INCLUYENDO CLÚSTER
+                        # LLAVE DE CRUCE DESDE EL CSV INCLUYENDO CLÚSTER Y ÁREA (SUBJ)
                         llaves_csv = (
                             df_c.get("PERIODO", pd.Series(dtype=str)).apply(ultra_limpiar) + "_" + 
                             nivel_csv + "_" + 
