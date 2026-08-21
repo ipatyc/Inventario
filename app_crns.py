@@ -571,6 +571,15 @@ with tab1:
         # ============================================================
         # MÓDULO: CREACIÓN MANUAL Y BUSCADOR MÁGICO FLEXIBLE
         # ============================================================
+        with tab1:
+    # Todo lo de subir archivos, validar y mesa de control
+
+    if st.session_state.res_auditoria is not None:
+        # Mesa de control
+        # Generar CSV por Excel o consolidado
+        # Panel de descarga
+        pass
+
         st.markdown("---")
         st.subheader("📝 Creación de CSV Manual (Con Autocompletado Flexible)")
         
