@@ -137,6 +137,8 @@ if "res_auditoria" not in st.session_state: st.session_state.res_auditoria = Non
 if "raw_altas" not in st.session_state: st.session_state.raw_altas = None
 if "ready_for_download" not in st.session_state: st.session_state.ready_for_download = False
 if "zip_file_bytes" not in st.session_state: st.session_state.zip_file_bytes = None
+if "csv_consolidado_bytes" not in st.session_state: st.session_state.csv_consolidado_bytes = None
+if "modo_salida_csv_generado" not in st.session_state: st.session_state.modo_salida_csv_generado = None
 if "csv_files_to_download" not in st.session_state: st.session_state.csv_files_to_download = {}
 if "delta_files" not in st.session_state: st.session_state.delta_files = {}
 if "final_argos_zip" not in st.session_state: st.session_state.final_argos_zip = None
@@ -166,7 +168,7 @@ with tab1:
         st.header("Validación de Claves, Horarios y Generación de CSV")
     with col_btn:
         if st.button("🔄 Limpiar / Recomenzar", type="secondary", use_container_width=True, key="btn_limpiar_t1"):
-            claves_a_borrar = ["file_cat_uploader", "file_cat_ext_uploader", "files_altas_uploader", "res_auditoria", "raw_altas", "ready_for_download", "cat_avanzado_cache", "df_manual_fijo"]
+            claves_a_borrar = ["file_cat_uploader", "file_cat_ext_uploader", "files_altas_uploader", "res_auditoria", "raw_altas", "ready_for_download", "zip_file_bytes", "csv_consolidado_bytes", "modo_salida_csv_generado", "cat_avanzado_cache", "df_manual_fijo"]
             for k in claves_a_borrar:
                 if k in st.session_state:
                     del st.session_state[k]
@@ -438,7 +440,15 @@ with tab1:
                             st.rerun()
 
         st.markdown("---")
+        modo_salida_csv = st.radio(
+            "¿Cómo deseas generar los CSV de los archivos ALTAS?",
+            ["Un CSV por cada Excel", "Un solo CSV consolidado"],
+            horizontal=True,
+            key="modo_salida_csv"
+        )
+
         if st.button("💾 Generar Bloque de Archivos CSV", type="primary", key="btn_generar_bloque_csv"):
+            st.session_state.ready_for_download = False
             corregido = st.session_state.raw_altas.copy()
 
             for col in ["Subject", "Course", "Tipo de Horario", "Método Educativo"]:
@@ -452,24 +462,18 @@ with tab1:
                     if pd.notna(row["Método Sugerido"]) and row["Método Sugerido"] != "": corregido.loc[row["idx"], "Método Educativo"] = str(row["Método Sugerido"])
 
             st.session_state.csv_files_to_download = {}
-            zip_buffer = io.BytesIO()
+            st.session_state.zip_file_bytes = None
+            st.session_state.csv_consolidado_bytes = None
             errores_encontrados = False
 
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                for name, sub in corregido.groupby("ArchivoOrigen"):
-                    columnas_requeridas_csv = [
-                        "Periodo", "Campus", "Subject", "Course", "Nivel", 
-                        "Parte de Periodo", "Estatus", "Capacidad", 
-                        "Sección", "Tipo de Horario", "Método Educativo", 
-                        "Modo de Calificar", "Sesion", "Clúster"
-                    ]
+            columnas_requeridas_csv = [
+                "Periodo", "Campus", "Subject", "Course", "Nivel",
+                "Parte de Periodo", "Estatus", "Capacidad",
+                "Sección", "Tipo de Horario", "Método Educativo",
+                "Modo de Calificar", "Sesion", "Clúster"
+            ]
 
-                    faltantes = [c for c in columnas_requeridas_csv if c not in sub.columns]
-                    if faltantes:
-                        st.error(f"❌ **Error en `{name}`**: Faltan columnas: **{', '.join(faltantes)}**.")
-                        errores_encontrados = True
-                        continue
-
+            def preparar_csv_banner(sub):
                     resultado_df = pd.DataFrame()
                     resultado_df["PERIODO"] = sub["Periodo"].apply(format_r_string)
                     resultado_df["SEDE"] = sub["Campus"].apply(format_r_string)
@@ -505,25 +509,64 @@ with tab1:
                     for col in resultado_df.columns:
                         resultado_df[col] = resultado_df[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
 
-                    csv_filename = f"{name.rsplit('.', 1)[0] if '.' in name else name}.csv"
-                    csv_string = resultado_df.to_csv(**CSV_KWARGS_R)
-                    zip_file.writestr(csv_filename, csv_string.encode('utf-8'))
-                    st.session_state.csv_files_to_download[csv_filename] = csv_string.encode('utf-8')
+                    return resultado_df.to_csv(**CSV_KWARGS_R)
+
+            if modo_salida_csv == "Un CSV por cada Excel":
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for name, sub in corregido.groupby("ArchivoOrigen"):
+                        faltantes = [c for c in columnas_requeridas_csv if c not in sub.columns]
+                        if faltantes:
+                            st.error(f"❌ **Error en `{name}`**: Faltan columnas: **{', '.join(faltantes)}**.")
+                            errores_encontrados = True
+                            continue
+
+                        csv_string = preparar_csv_banner(sub)
+                        csv_filename = f"{name.rsplit('.', 1)[0] if '.' in name else name}.csv"
+                        zip_file.writestr(csv_filename, csv_string.encode('utf-8'))
+                        st.session_state.csv_files_to_download[csv_filename] = csv_string.encode('utf-8')
+
+                if not errores_encontrados:
+                    st.session_state.zip_file_bytes = zip_buffer.getvalue()
+            else:
+                faltantes_por_archivo = []
+                for name, sub in corregido.groupby("ArchivoOrigen"):
+                    faltantes = [c for c in columnas_requeridas_csv if c not in sub.columns]
+                    if faltantes:
+                        faltantes_por_archivo.append(f"`{name}`: {', '.join(faltantes)}")
+
+                if faltantes_por_archivo:
+                    for detalle in faltantes_por_archivo:
+                        st.error(f"❌ Faltan columnas en {detalle}.")
+                    errores_encontrados = True
+                else:
+                    csv_string = preparar_csv_banner(corregido)
+                    st.session_state.csv_consolidado_bytes = csv_string.encode('utf-8')
 
             if not errores_encontrados:
-                st.session_state.zip_file_bytes = zip_buffer.getvalue()
                 st.session_state.ready_for_download = True
+                st.session_state.modo_salida_csv_generado = modo_salida_csv
                 st.rerun()
 
         if st.session_state.ready_for_download:
             st.markdown("### 📥 Panel de Descarga")
-            st.download_button(
-                "💥 📥 DESCARGAR TODOS LOS CSVs (.ZIP)", 
-                data=st.session_state.zip_file_bytes, 
-                file_name="archivos_carga_banner.zip", 
-                mime="application/zip", use_container_width=True, type="primary",
-                key="dl_todos_csv_zip"
-            )
+            modo_descarga = st.session_state.modo_salida_csv_generado or modo_salida_csv
+            if modo_descarga == "Un CSV por cada Excel":
+                st.download_button(
+                    "💥 📥 DESCARGAR TODOS LOS CSVs (.ZIP)",
+                    data=st.session_state.zip_file_bytes,
+                    file_name="archivos_carga_banner.zip",
+                    mime="application/zip", use_container_width=True, type="primary",
+                    key="dl_todos_csv_zip"
+                )
+            else:
+                st.download_button(
+                    "💥 📥 DESCARGAR CSV CONSOLIDADO",
+                    data=st.session_state.csv_consolidado_bytes,
+                    file_name="archivos_carga_banner.csv",
+                    mime="text/csv", use_container_width=True, type="primary",
+                    key="dl_csv_consolidado"
+                )
 
         # ============================================================
         # MÓDULO: CREACIÓN MANUAL Y BUSCADOR MÁGICO FLEXIBLE
@@ -639,7 +682,6 @@ with tab1:
                 use_container_width=True,
                 key="dl_csv_manual_btn"
             )
-
 
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
