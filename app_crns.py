@@ -969,16 +969,33 @@ with tab3:
                     st.error(f"❌ Ocurrió un error en el cruce rápido: {str(e)}")
 
         if st.session_state.df_cruce_rapido is not None:
-            st.markdown("### 📋 Resultados (Selecciona y copia la tabla o descárgala)")
+            # 👇 NUEVO: SECCIÓN DE RESULTADOS CON OPCIÓN DE COPIADO FÁCIL
+            st.markdown("### 📋 Resultados del Cruce (NRC inyectados)")
+            
+            # Vista interactiva visual
             st.dataframe(st.session_state.df_cruce_rapido, use_container_width=True)
             
-            excel_rapido_buffer = io.BytesIO()
-            st.session_state.df_cruce_rapido.to_excel(excel_rapido_buffer, index=False)
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                st.markdown("#### 📝 ¿Quieres copiar la tabla directamente?")
+                st.info("Haz clic en el botón de **'Copiar'** en la esquina superior derecha del cuadro de abajo y pégalo (Ctrl+V) en tu Excel. Los datos se acomodarán solos.")
+                
+                # Convertimos la tabla a formato de texto separado por tabulaciones (TSV)
+                # Al pegarlo en Excel, las tabulaciones separan el texto en columnas automáticamente.
+                tsv_rapido = st.session_state.df_cruce_rapido.to_csv(index=False, sep='\t')
+                st.code(tsv_rapido, language="text")
             
-            st.download_button(
-                label="📥 Descargar esta tabla en Excel (.xlsx)",
-                data=excel_rapido_buffer.getvalue(),
-                file_name="Cruce_Rapido_NRC.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
-            )
+            with col_b2:
+                st.markdown("#### 📥 O descárgala en formato Excel")
+                st.info("Si prefieres descargar el archivo listo para usar, usa este botón:")
+                excel_rapido_buffer = io.BytesIO()
+                st.session_state.df_cruce_rapido.to_excel(excel_rapido_buffer, index=False)
+                
+                st.download_button(
+                    label="📥 Descargar esta tabla (.xlsx)",
+                    data=excel_rapido_buffer.getvalue(),
+                    file_name="Cruce_Rapido_NRC.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True
+                )
