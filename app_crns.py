@@ -653,21 +653,52 @@ with tab1:
         nombre_csv_manual = col_nom.text_input("Nombre del archivo:", value="carga_manual.csv", key="nom_manual_seguro")
         
         df_out_manual = st.session_state.df_manual_fijo.copy()
-        for col in df_out_manual.columns: df_out_manual[col] = df_out_manual[col].astype(str).str.replace('"', "").str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
         
+        # 1. Aplicar format_r_string a las columnas de texto generales (Igual que en el CSV masivo)
+        columnas_r_string = ["PERIODO", "SEDE", "PARTEPERIODO", "STATUS", "MODODECALIFICAR", "SESION", "datocomplementario"]
+        for col in columnas_r_string:
+            if col in df_out_manual.columns:
+                df_out_manual[col] = df_out_manual[col].apply(format_r_string)
+        
+        # 2. Aplicar sin_espacios a las claves (Igual que en el CSV masivo)
         for col in ["SUBJ", "COURSE", "TIPODEHORARIO", "METODO_EDUCATIVO"]: 
-            if col in df_out_manual.columns: df_out_manual[col] = df_out_manual[col].apply(sin_espacios)
-        if "GRUPOS" in df_out_manual.columns: df_out_manual["GRUPOS"] = df_out_manual["GRUPOS"].replace("", "1")
-        if "SOCIODEINTEGRACION" in df_out_manual.columns: df_out_manual["SOCIODEINTEGRACION"] = df_out_manual["SOCIODEINTEGRACION"].replace("", "D2L")
+            if col in df_out_manual.columns: 
+                df_out_manual[col] = df_out_manual[col].apply(sin_espacios)
+                
+        # 3. Forzar valores fijos y numéricos (Igual que en el CSV masivo)
+        if "GRUPOS" in df_out_manual.columns: 
+            df_out_manual["GRUPOS"] = pd.Series(1, index=df_out_manual.index, dtype="Int64")
+        if "SOCIODEINTEGRACION" in df_out_manual.columns: 
+            df_out_manual["SOCIODEINTEGRACION"] = "D2L"
+            
         for col_num in ["CAPACIDAD", "SECCION"]:
-            if col_num in df_out_manual.columns: df_out_manual[col_num] = pd.to_numeric(df_out_manual[col_num], errors="coerce").astype("Int64")
+            if col_num in df_out_manual.columns: 
+                df_out_manual[col_num] = pd.to_numeric(df_out_manual[col_num], errors="coerce").astype("Int64")
+
+        # 4. Limpieza final de texto: quitar comillas dobles y nulos de pandas
+        for col in df_out_manual.columns: 
+            if df_out_manual[col].dtype == object or pd.api.types.is_string_dtype(df_out_manual[col]):
+                df_out_manual[col] = df_out_manual[col].astype(str).str.replace('"', "", regex=False).str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
+        
+        # 5. Forzar el ORDEN EXACTO de las columnas
+        orden_columnas = [
+            "PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS", 
+            "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO", "METODO_EDUCATIVO", 
+            "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION", "datocomplementario"
+        ]
+        columnas_existentes = [c for c in orden_columnas if c in df_out_manual.columns]
+        df_out_manual = df_out_manual[columnas_existentes]
 
         col_desc.write(""); col_desc.write("") # Espaciado para alinear el botón
         col_desc.download_button(
-            label="📥 Descargar CSV Manual", data=df_out_manual.to_csv(**CSV_KWARGS_R).encode("utf-8"),
+            label="📥 Descargar CSV Manual", 
+            data=df_out_manual.to_csv(**CSV_KWARGS_R).encode("utf-8"),
             file_name=nombre_csv_manual if nombre_csv_manual.endswith(".csv") else f"{nombre_csv_manual}.csv",
-            mime="text/csv", type="primary", use_container_width=True, key="dl_csv_manual_btn"
-        )        
+            mime="text/csv", 
+            type="primary", 
+            use_container_width=True, 
+            key="dl_csv_manual_btn"
+        )
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
