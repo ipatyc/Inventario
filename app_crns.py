@@ -643,7 +643,22 @@ with tab1:
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
 with tab_err:
-    st.header("⚠️ Reporte de Errores y Ensamblaje Final")
+    # --- ENCABEZADO Y BOTÓN DE REINICIO ---
+    col_tit_t2, col_btn_t2 = st.columns([4, 1])
+    with col_tit_t2:
+        st.header("⚠️ Reporte de Errores y Ensamblaje Final")
+    with col_btn_t2:
+        # Limpia todas las variables de sesión de esta pestaña
+        if st.button("🔄 Limpiar / Recomenzar", type="secondary", use_container_width=True, key="btn_limpiar_t2"):
+            claves_a_borrar_t2 = [
+                "df_delta_cache", "nombre_delta_cache", "llave_control_archivos", 
+                "archivo_final_bytes", "archivo_final_nombre", "ext_base_1", "ext_err_1", 
+                "suf_v1", "modo_1", "ed_vivo_1", "iny_base_2", "iny_err_2", "iny_corr_2", "suf_v2"
+            ]
+            for clave in claves_a_borrar_t2:
+                if clave in st.session_state: del st.session_state[clave]
+            st.rerun()
+            
     st.markdown("Extrae filas con error, corrígelas y genera el archivo para la Pestaña 3.")
     
     # --- PASO 1: EXTRAER O EDITAR EL PEDACITO CON ERROR ---
@@ -762,14 +777,25 @@ with tab_err:
             use_container_width=True,
             key="dl_archivo_final_ensamblado"
         )
-
-
 # ============================================================
 # PESTAÑA 3: INYECCIÓN DE NRCS Y CRUCES CON ARGOS
 # ============================================================
 with tab3:
-    st.header("Inyección de NRCs y Cruces con ARGOS")
-    
+    # --- ENCABEZADO Y BOTÓN DE REINICIO ---
+    col_tit_t3, col_btn_t3 = st.columns([4, 1])
+    with col_tit_t3:
+        st.header("Inyección de NRCs y Cruces con ARGOS")
+    with col_btn_t3:
+        # Limpia todas las variables de sesión de esta pestaña
+        if st.button("🔄 Limpiar / Recomenzar", type="secondary", use_container_width=True, key="btn_limpiar_t3"):
+            claves_a_borrar_t3 = [
+                "modo_inyeccion_t3", "arg_c", "csv_c", "xls_c", "final_argos_zip", 
+                "arg_r", "csv_r", "df_cruce_rapido", "columnas_copia_rapida"
+            ]
+            for clave in claves_a_borrar_t3:
+                if clave in st.session_state: del st.session_state[clave]
+            st.rerun()
+            
     modo_inyeccion = st.radio(
         "🛠️ **Elige tu escenario de archivos disponibles:**",
         ["📦 Completo (Tengo ARGOS, CSV Final y Excel Original)", 
@@ -1192,5 +1218,4 @@ with tab3:
 
             else:
                 st.warning(
-                    "⚠️ Selecciona por lo menos una columna para poder copiar o descargar."
-                )
+                    "⚠️ Selecciona por lo menos una columna para poder copiar o descargar.")
