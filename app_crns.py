@@ -161,1951 +161,484 @@ tab1, tab_err, tab3 = st.tabs([
 # PESTAÑA 1: VALIDACIÓN, CSV Y AUTOCOMPLETADO
 # ============================================================
 with tab1:
-    # ============================================================
-    # ENCABEZADO Y REINICIO
-    # ============================================================
+    # --- 1. ENCABEZADO Y BOTÓN DE REINICIO ---
     col_tit, col_btn = st.columns([4, 1])
-
     with col_tit:
         st.header("Validación de Claves, Horarios y Generación de CSV")
-
     with col_btn:
-        if st.button(
-            "🔄 Limpiar / Recomenzar",
-            type="secondary",
-            use_container_width=True,
-            key="btn_limpiar_t1"
-        ):
+        # Limpia todas las variables de sesión para empezar desde cero
+        if st.button("🔄 Limpiar / Recomenzar", type="secondary", use_container_width=True, key="btn_limpiar_t1"):
             claves_a_borrar = [
-                "file_cat_uploader",
-                "file_cat_ext_uploader",
-                "files_altas_uploader",
-                "res_auditoria",
-                "raw_altas",
-                "ready_for_download",
-                "modo_salida_csv",
-                "zip_file_bytes",
-                "csv_consolidado_bytes",
-                "modo_salida_csv_generado",
-                "cat_avanzado_cache",
-                "cat_avanzado_firma",
-                "df_manual_fijo",
-                "manual_candidatos",
-                "manual_busqueda_realizada",
-                "manual_materia_seleccionada",
-                "manual_archivo_visualizado",
-                "manual_renglon_accion",
-                "input_nom_busq",
-                "input_subj_busq",
-                "input_crse_busq",
-                "manual_horario",
-                "manual_metodo",
-                "manual_periodo",
-                "manual_parte_periodo",
-                "manual_capacidad",
-                "manual_seccion",
-                "manual_sede",
-                "manual_estatus",
-                "manual_modo_calificar",
-                "manual_sesion",
-                "manual_grupos",
-                "manual_integracion",
-                "manual_nivel",
-                "manual_cluster"
+                "file_cat_uploader", "file_cat_ext_uploader", "files_altas_uploader", "res_auditoria", 
+                "raw_altas", "ready_for_download", "modo_salida_csv", "zip_file_bytes", 
+                "csv_consolidado_bytes", "modo_salida_csv_generado", "cat_avanzado_cache", 
+                "cat_avanzado_firma", "df_manual_fijo", "manual_candidatos", "manual_busqueda_realizada", 
+                "manual_materia_seleccionada", "manual_archivo_visualizado", "manual_renglon_accion", 
+                "input_nom_busq", "input_subj_busq", "input_crse_busq", "manual_horario", "manual_metodo", 
+                "manual_periodo", "manual_parte_periodo", "manual_capacidad", "manual_seccion", 
+                "manual_sede", "manual_estatus", "manual_modo_calificar", "manual_sesion", "manual_grupos", 
+                "manual_integracion", "manual_nivel", "manual_cluster"
             ]
-
             for clave in claves_a_borrar:
-                if clave in st.session_state:
-                    del st.session_state[clave]
-
+                if clave in st.session_state: del st.session_state[clave]
             st.rerun()
 
-    # ============================================================
-    # CARGA DE ARCHIVOS
-    # ============================================================
+    # --- 2. ZONA DE CARGA DE ARCHIVOS ---
     col1, col2, col3 = st.columns(3)
+    with col1: file_cat = st.file_uploader("📑 Catálogo Básico (Niveles)", type=["xlsx"], key="file_cat_uploader")
+    with col2: file_cat_ext = st.file_uploader("📚 Catálogo Avanzado (SCBCRSE)", type=["csv", "xlsx"], key="file_cat_ext_uploader")
+    with col3: files_altas = st.file_uploader("📁 Archivos ALTAS", accept_multiple_files=True, type=["xlsx"], key="files_altas_uploader")
 
-    with col1:
-        file_cat = st.file_uploader(
-            "📑 Catálogo Básico (Niveles)",
-            type=["xlsx"],
-            key="file_cat_uploader"
-        )
-
-    with col2:
-        file_cat_ext = st.file_uploader(
-            "📚 Catálogo Avanzado (SCBCRSE)",
-            type=["csv", "xlsx"],
-            key="file_cat_ext_uploader"
-        )
-
-    with col3:
-        files_altas = st.file_uploader(
-            "📁 Archivos ALTAS",
-            accept_multiple_files=True,
-            type=["xlsx"],
-            key="files_altas_uploader"
-        )
-
-    # ============================================================
-    # SELECCIÓN DE SALIDA CUANDO HAY EXCEL
-    # ============================================================
+    # Configuración de salida de CSV si hay archivos cargados
     modo_salida_csv = "Un CSV por cada Excel"
-
     if files_altas:
-        modo_salida_csv = st.radio(
-            "¿Cómo deseas generar los CSV de los archivos ALTAS?",
-            [
-                "Un CSV por cada Excel",
-                "Un solo CSV consolidado"
-            ],
-            horizontal=True,
-            key="modo_salida_csv"
-        )
+        modo_salida_csv = st.radio("¿Cómo deseas generar los CSV de los archivos ALTAS?", ["Un CSV por cada Excel", "Un solo CSV consolidado"], horizontal=True, key="modo_salida_csv")
 
-    columnas_esperadas = [
-        "Periodo",
-        "Campus",
-        "Subject",
-        "Course",
-        "Nivel",
-        "Nombre de la Materia",
-        "Parte de Periodo",
-        "Estatus",
-        "Capacidad",
-        "Sección",
-        "Tipo de Horario",
-        "Método Educativo",
-        "Modo de Calificar",
-        "Sesion",
-        "Clúster"
-    ]
+    columnas_esperadas = ["Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia", "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"]
+    mapa_huellas = {normalizar_para_busqueda(col): col for col in columnas_esperadas}
 
-    mapa_huellas = {
-        normalizar_para_busqueda(col): col
-        for col in columnas_esperadas
-    }
-
-    # ============================================================
-    # LECTURA DEL CATÁLOGO AVANZADO
-    # ============================================================
+    # --- 3. FUNCIÓN PARA CARGAR CATÁLOGO AVANZADO EN MEMORIA ---
     def cargar_catalogo_avanzado():
-        firma_catalogo = (
-            f"{file_cat_ext.name}:{getattr(file_cat_ext, 'size', '')}"
-            if file_cat_ext is not None
-            else None
-        )
+        firma_catalogo = f"{file_cat_ext.name}:{getattr(file_cat_ext, 'size', '')}" if file_cat_ext else None
+        if "cat_avanzado_cache" in st.session_state and st.session_state.get("cat_avanzado_firma") == firma_catalogo:
+            return st.session_state.cat_avanzado_cache, st.session_state.indice_nombres_avanzado
 
-        if (
-            "cat_avanzado_cache" in st.session_state
-            and st.session_state.get("cat_avanzado_firma") == firma_catalogo
-        ):
-            return (
-                st.session_state.cat_avanzado_cache,
-                st.session_state.indice_nombres_avanzado
-            )
-
-        cat_avanzado = {}
-        indice_nombres_avanzado = {}
-
+        cat_avanzado, indice_nombres_avanzado = {}, {}
         if file_cat_ext is not None:
             try:
-                if file_cat_ext.name.lower().endswith(".csv"):
-                    df_ext = pd.read_csv(
-                        file_cat_ext,
-                        dtype=str,
-                        encoding="utf-8",
-                        on_bad_lines="skip"
-                    )
-                else:
-                    df_ext = pd.read_excel(
-                        file_cat_ext,
-                        dtype=str
-                    )
-
-                df_ext.columns = [
-                    str(col).strip().upper()
-                    for col in df_ext.columns
-                ]
+                df_ext = pd.read_csv(file_cat_ext, dtype=str, encoding="utf-8", on_bad_lines="skip") if file_cat_ext.name.lower().endswith(".csv") else pd.read_excel(file_cat_ext, dtype=str)
+                df_ext.columns = [str(col).strip().upper() for col in df_ext.columns]
 
                 for _, row in df_ext.iterrows():
-                    subj = sin_espacios(
-                        row.get("SCBCRSE_SUBJ_CODE")
-                    )
+                    subj, crse = sin_espacios(row.get("SCBCRSE_SUBJ_CODE")), sin_espacios(row.get("SCBCRSE_CRSE_NUMB"))
+                    if not subj or not crse: continue
 
-                    crse = sin_espacios(
-                        row.get("SCBCRSE_CRSE_NUMB")
-                    )
-
-                    if not subj or not crse:
-                        continue
-
-                    titulo_corto = limpiar_espacios_y_mayusculas(
-                        row.get("SCBCRSE_TITLE")
-                    )
-
-                    titulo_largo = limpiar_espacios_y_mayusculas(
-                        row.get("SCRSYLN_LONG_COURSE_TITLE")
-                    )
-
-                    horario = sin_espacios(
-                        row.get("SCRSCHD_SCHD_CODE")
-                    )
-
-                    metodo = sin_espacios(
-                        row.get("SCRSCHD_INSM_CODE")
-                    )
-
+                    titulo_corto, titulo_largo = limpiar_espacios_y_mayusculas(row.get("SCBCRSE_TITLE")), limpiar_espacios_y_mayusculas(row.get("SCRSYLN_LONG_COURSE_TITLE"))
+                    horario, metodo = sin_espacios(row.get("SCRSCHD_SCHD_CODE")), sin_espacios(row.get("SCRSCHD_INSM_CODE"))
                     llave = (subj, crse)
 
                     if llave not in cat_avanzado:
-                        cat_avanzado[llave] = {
-                            "titles": set(),
-                            "schd": set(),
-                            "insm": set()
-                        }
+                        cat_avanzado[llave] = {"titles": set(), "schd": set(), "insm": set()}
 
                     if titulo_corto and titulo_corto != "NAN":
-                        cat_avanzado[llave]["titles"].add(
-                            titulo_corto
-                        )
-
-                        indice_nombres_avanzado[
-                            normalizar_para_cruce(titulo_corto)
-                        ] = llave
-
+                        cat_avanzado[llave]["titles"].add(titulo_corto)
+                        indice_nombres_avanzado[normalizar_para_cruce(titulo_corto)] = llave
                     if titulo_largo and titulo_largo != "NAN":
-                        cat_avanzado[llave]["titles"].add(
-                            titulo_largo
-                        )
+                        cat_avanzado[llave]["titles"].add(titulo_largo)
+                        indice_nombres_avanzado[normalizar_para_cruce(titulo_largo)] = llave
+                    if horario and horario != "NAN": cat_avanzado[llave]["schd"].add(horario)
+                    if metodo and metodo != "NAN": cat_avanzado[llave]["insm"].add(metodo)
 
-                        indice_nombres_avanzado[
-                            normalizar_para_cruce(titulo_largo)
-                        ] = llave
-
-                    if horario and horario != "NAN":
-                        cat_avanzado[llave]["schd"].add(
-                            horario
-                        )
-
-                    if metodo and metodo != "NAN":
-                        cat_avanzado[llave]["insm"].add(
-                            metodo
-                        )
-
-                st.session_state.cat_avanzado_cache = cat_avanzado
-                st.session_state.indice_nombres_avanzado = (
-                    indice_nombres_avanzado
-                )
-
+                st.session_state.cat_avanzado_cache, st.session_state.indice_nombres_avanzado = cat_avanzado, indice_nombres_avanzado
                 st.session_state.cat_avanzado_firma = firma_catalogo
-
             except Exception as error:
-                st.error(
-                    f"Error al leer el Catálogo Avanzado: {error}"
-                )
-
+                st.error(f"Error al leer el Catálogo Avanzado: {error}")
         return cat_avanzado, indice_nombres_avanzado
 
-    # ============================================================
-    # VALIDACIÓN DE ARCHIVOS ALTAS
-    # ============================================================
+    # --- 4. VALIDACIÓN DE ARCHIVOS MASIVOS (ALTAS) ---
     if files_altas and file_cat:
-        if st.button(
-            "⚡ Ejecutar Validación Inteligente",
-            type="primary",
-            key="btn_val_inteligente"
-        ):
+        if st.button("⚡ Ejecutar Validación Inteligente", type="primary", key="btn_val_inteligente"):
             st.session_state.ready_for_download = False
-
-            st.toast(
-                "Cargando Catálogos y validando...",
-                icon="📑"
-            )
-
-            cat_avanzado, indice_nombres_avanzado = (
-                cargar_catalogo_avanzado()
-            )
-
+            st.toast("Cargando Catálogos y validando...", icon="📑")
+            
+            cat_avanzado, indice_nombres_avanzado = cargar_catalogo_avanzado()
             xls_cat = pd.ExcelFile(file_cat)
-            indice_cat = {}
-            indice_cat_claves = {}
+            indice_cat, indice_cat_claves = {}, {}
 
+            # Indexar catálogo básico
             for hoja in xls_cat.sheet_names:
                 df_catalogo = xls_cat.parse(hoja)
+                if "Nivel" in df_catalogo.columns and "Materia" in df_catalogo.columns:
+                    for _, fila in df_catalogo.iterrows():
+                        nivel, materia, subj, crse = normalizar_para_cruce(fila.get("Nivel")), limpiar_espacios_y_mayusculas(fila.get("Materia")), sin_espacios(fila.get("Subj")), sin_espacios(fila.get("Crse"))
+                        indice_cat.setdefault(nivel, []).append({"mat_orig": materia, "mat_norm": normalizar_para_cruce(fila.get("Materia")), "subj": subj, "crse": crse})
+                        if subj and crse: indice_cat_claves[(normalizar_para_cruce(subj), crse)] = materia
 
-                if (
-                    "Nivel" in df_catalogo.columns
-                    and "Materia" in df_catalogo.columns
-                ):
-                    for _, fila_catalogo in df_catalogo.iterrows():
-                        nivel = normalizar_para_cruce(
-                            fila_catalogo.get("Nivel")
-                        )
-
-                        materia = limpiar_espacios_y_mayusculas(
-                            fila_catalogo.get("Materia")
-                        )
-
-                        subj = sin_espacios(
-                            fila_catalogo.get("Subj")
-                        )
-
-                        crse = sin_espacios(
-                            fila_catalogo.get("Crse")
-                        )
-
-                        indice_cat.setdefault(nivel, []).append({
-                            "mat_orig": materia,
-                            "mat_norm": normalizar_para_cruce(
-                                fila_catalogo.get("Materia")
-                            ),
-                            "subj": subj,
-                            "crse": crse
-                        })
-
-                        if subj and crse:
-                            indice_cat_claves[
-                                (
-                                    normalizar_para_cruce(subj),
-                                    crse
-                                )
-                            ] = materia
-
-            piezas = []
-
+            # Procesar archivos ALTAS
+            piezas, resultados = [], []
             for archivo_altas in files_altas:
-                st.session_state.original_files_bytes[
-                    archivo_altas.name
-                ] = archivo_altas.getvalue()
-
+                st.session_state.original_files_bytes[archivo_altas.name] = archivo_altas.getvalue()
                 xls_altas = pd.ExcelFile(archivo_altas)
+                hojas_reales = [h for h in xls_altas.sheet_names if h.strip().upper() == HOJA_ALTAS]
+                if not hojas_reales: continue
 
-                hojas_reales = [
-                    hoja for hoja in xls_altas.sheet_names
-                    if hoja.strip().upper() == HOJA_ALTAS
-                ]
-
-                if not hojas_reales:
-                    continue
-
-                df_altas = xls_altas.parse(
-                    hojas_reales[0],
-                    dtype=str
-                )
-
-                nuevas_columnas = []
-
-                for columna in df_altas.columns:
-                    huella = normalizar_para_busqueda(columna)
-
-                    if huella in mapa_huellas:
-                        nuevas_columnas.append(
-                            mapa_huellas[huella]
-                        )
-                    else:
-                        nuevas_columnas.append(columna)
-
-                df_altas.columns = nuevas_columnas
-
-                columnas_esenciales = [
-                    col for col in [
-                        "Periodo",
-                        "Campus",
-                        "Subject",
-                        "Course"
-                    ]
-                    if col in df_altas.columns
-                ]
-
-                if columnas_esenciales:
-                    df_altas = df_altas.dropna(
-                        subset=columnas_esenciales,
-                        how="all"
-                    )
-
-                df_altas = df_altas.dropna(how="all")
-
+                df_altas = xls_altas.parse(hojas_reales[0], dtype=str)
+                df_altas.columns = [mapa_huellas.get(normalizar_para_busqueda(col), col) for col in df_altas.columns]
+                
+                cols_esenciales = [c for c in ["Periodo", "Campus", "Subject", "Course"] if c in df_altas.columns]
+                if cols_esenciales: df_altas = df_altas.dropna(subset=cols_esenciales, how="all").dropna(how="all")
+                
                 if not df_altas.empty:
                     df_altas["ArchivoOrigen"] = archivo_altas.name
                     piezas.append(df_altas)
 
             if piezas:
-                df_total = pd.concat(
-                    piezas,
-                    ignore_index=True
-                )
-
+                df_total = pd.concat(piezas, ignore_index=True)
                 st.session_state.raw_altas = df_total.copy()
-                resultados = []
 
+                # Validación fila por fila
                 for idx, fila in df_total.iterrows():
-                    nivel = normalizar_para_cruce(
-                        fila.get("Nivel")
-                    )
+                    nivel, materia_excel, subj_original, crse_original = normalizar_para_cruce(fila.get("Nivel")), limpiar_espacios_y_mayusculas(fila.get("Nombre de la Materia")), sin_espacios(fila.get("Subject")), sin_espacios(fila.get("Course"))
+                    horario_original, metodo_original = sin_espacios(fila.get("Tipo de Horario")), sin_espacios(fila.get("Método Educativo"))
+                    materia_normalizada = normalizar_para_cruce(materia_excel)
+                    
+                    subj_sugerido, crse_sugerido, materia_catalogo, comentario_nombres = subj_original, crse_original, materia_excel, ""
 
-                    materia_excel = limpiar_espacios_y_mayusculas(
-                        fila.get("Nombre de la Materia")
-                    )
-
-                    materia_normalizada = normalizar_para_cruce(
-                        materia_excel
-                    )
-
-                    subj_original = sin_espacios(
-                        fila.get("Subject")
-                    )
-
-                    crse_original = sin_espacios(
-                        fila.get("Course")
-                    )
-
-                    horario_original = sin_espacios(
-                        fila.get("Tipo de Horario")
-                    )
-
-                    metodo_original = sin_espacios(
-                        fila.get("Método Educativo")
-                    )
-
-                    subj_sugerido = subj_original
-                    crse_sugerido = crse_original
-                    materia_catalogo = materia_excel
-                    comentario_nombres = ""
-
-                    if cat_avanzado:
-                        if (
-                            subj_original,
-                            crse_original
-                        ) in cat_avanzado:
-
-                            titulos_permitidos = [
-                                normalizar_para_cruce(titulo)
-                                for titulo in cat_avanzado[
-                                    (subj_original, crse_original)
-                                ]["titles"]
-                            ]
-
-                            if materia_normalizada in titulos_permitidos:
-                                comentario_nombres = (
-                                    "Nombre y Claves OK"
-                                )
-                            else:
-                                titulos = sorted(
-                                    cat_avanzado[
-                                        (subj_original, crse_original)
-                                    ]["titles"]
-                                )
-
-                                materia_catalogo = (
-                                    titulos[0]
-                                    if titulos
-                                    else materia_excel
-                                )
-
-                                comentario_nombres = (
-                                    "Clave OK, pero Nombre "
-                                    "difiere del Catálogo"
-                                )
-
-                        elif materia_normalizada in indice_nombres_avanzado:
-                            subj_sugerido, crse_sugerido = (
-                                indice_nombres_avanzado[
-                                    materia_normalizada
-                                ]
-                            )
-
-                            comentario_nombres = (
-                                "Claves incorrectas "
-                                "(Match por Nombre en Cat. Avanzado)"
-                            )
-
+                    # Validación Nombres y Claves (Avanzado -> Básico)
+                    if cat_avanzado and (subj_original, crse_original) in cat_avanzado:
+                        titulos_permitidos = [normalizar_para_cruce(t) for t in cat_avanzado[(subj_original, crse_original)]["titles"]]
+                        if materia_normalizada in titulos_permitidos: comentario_nombres = "Nombre y Claves OK"
                         else:
-                            comentario_nombres = (
-                                "No hallado en Avanzado. "
-                                "Buscando en Básico..."
-                            )
+                            titulos = sorted(cat_avanzado[(subj_original, crse_original)]["titles"])
+                            materia_catalogo = titulos[0] if titulos else materia_excel
+                            comentario_nombres = "Clave OK, pero Nombre difiere del Catálogo"
+                    elif materia_normalizada in indice_nombres_avanzado:
+                        subj_sugerido, crse_sugerido = indice_nombres_avanzado[materia_normalizada]
+                        comentario_nombres = "Claves incorrectas (Match por Nombre en Cat. Avanzado)"
+                    else:
+                        comentario_nombres = "Buscando en Básico..."
 
-                    if (
-                        not comentario_nombres
-                        or "Buscando en Básico" in comentario_nombres
-                    ):
-                        candidatos_catalogo = indice_cat.get(
-                            nivel,
-                            []
-                        )
-
-                        coincidencias_exactas = [
-                            candidato
-                            for candidato in candidatos_catalogo
-                            if candidato["mat_norm"]
-                            == materia_normalizada
-                        ]
-
-                        coincidencia_elegida = None
-
+                    if "Buscando en Básico" in comentario_nombres:
+                        candidatos_cat = indice_cat.get(nivel, [])
+                        coincidencias_exactas = [c for c in candidatos_cat if c["mat_norm"] == materia_normalizada]
+                        
                         if coincidencias_exactas:
-                            coincidencia_perfecta = next(
-                                (
-                                    candidato
-                                    for candidato in coincidencias_exactas
-                                    if candidato["subj"] == subj_original
-                                    and candidato["crse"] == crse_original
-                                ),
-                                None
-                            )
-
-                            coincidencia_elegida = (
-                                coincidencia_perfecta
-                                if coincidencia_perfecta
-                                else coincidencias_exactas[0]
-                            )
-
+                            perfecta = next((c for c in coincidencias_exactas if c["subj"] == subj_original and c["crse"] == crse_original), None)
+                            coincidencia_elegida = perfecta if perfecta else coincidencias_exactas[0]
+                            subj_sugerido, crse_sugerido, materia_catalogo = coincidencia_elegida["subj"], coincidencia_elegida["crse"], coincidencia_elegida["mat_orig"]
+                            comentario_nombres = "Todo correcto (Cat. Básico)" if perfecta else "Claves sugeridas (Cat. Básico)"
                         else:
-                            mejor_candidato = None
-                            mejor_puntaje = -1.0
-
-                            for candidato in candidatos_catalogo:
-                                puntaje = similitud(
-                                    materia_normalizada,
-                                    candidato["mat_norm"]
-                                )
-
-                                if puntaje > mejor_puntaje:
-                                    mejor_puntaje = puntaje
-                                    mejor_candidato = candidato
-
-                            if (
-                                mejor_candidato
-                                and mejor_puntaje >= UMBRAL_FUZZY
-                            ):
-                                coincidencia_elegida = mejor_candidato
-
-                        if coincidencia_elegida:
-                            subj_sugerido = coincidencia_elegida["subj"]
-                            crse_sugerido = coincidencia_elegida["crse"]
-
-                            materia_catalogo = coincidencia_elegida[
-                                "mat_orig"
-                            ]
-
-                            if (
-                                subj_original == subj_sugerido
-                                and crse_original == crse_sugerido
-                            ):
-                                comentario_nombres = (
-                                    "Todo correcto (Cat. Básico)"
-                                )
+                            # Fuzzy matching simplificado
+                            mejor_candidato, mejor_puntaje = None, -1.0
+                            for c in candidatos_cat:
+                                p = similitud(materia_normalizada, c["mat_norm"])
+                                if p > mejor_puntaje: mejor_puntaje, mejor_candidato = p, c
+                            if mejor_candidato and mejor_puntaje >= UMBRAL_FUZZY:
+                                subj_sugerido, crse_sugerido, materia_catalogo = mejor_candidato["subj"], mejor_candidato["crse"], mejor_candidato["mat_orig"]
+                                comentario_nombres = "Claves sugeridas (Cat. Básico)"
                             else:
-                                comentario_nombres = (
-                                    "Claves sugeridas (Cat. Básico)"
-                                )
+                                llave_clave = (normalizar_para_cruce(subj_original), crse_original)
+                                if llave_clave in indice_cat_claves:
+                                    materia_catalogo = indice_cat_claves[llave_clave]
+                                    comentario_nombres = "Nombre sugerido por Claves (Cat. Básico)"
+                                else: comentario_nombres = "No se encontró en ningún catálogo"
 
-                        else:
-                            llave_clave = (
-                                normalizar_para_cruce(subj_original),
-                                crse_original
-                            )
-
-                            if llave_clave in indice_cat_claves:
-                                materia_catalogo = indice_cat_claves[
-                                    llave_clave
-                                ]
-
-                                comentario_nombres = (
-                                    "Nombre sugerido por Claves "
-                                    "(Cat. Básico)"
-                                )
-
-                            else:
-                                comentario_nombres = (
-                                    "No se encontró en ningún catálogo"
-                                )
-
-                    horario_sugerido = horario_original
-                    metodo_sugerido = metodo_original
-
-                    comentario_horario = (
-                        "Sin catálogo para validar"
-                    )
-
-                    comentario_metodo = (
-                        "Sin catálogo para validar"
-                    )
-
-                    if (
-                        cat_avanzado
-                        and (
-                            subj_sugerido,
-                            crse_sugerido
-                        ) in cat_avanzado
-                    ):
-                        horarios_permitidos = cat_avanzado[
-                            (subj_sugerido, crse_sugerido)
-                        ]["schd"]
-
-                        metodos_permitidos = cat_avanzado[
-                            (subj_sugerido, crse_sugerido)
-                        ]["insm"]
-
+                    # Validación Horarios y Métodos
+                    horario_sugerido, metodo_sugerido, comentario_horario, comentario_metodo = horario_original, metodo_original, "Sin catálogo para validar", "Sin catálogo para validar"
+                    if cat_avanzado and (subj_sugerido, crse_sugerido) in cat_avanzado:
+                        horarios_permitidos = cat_avanzado[(subj_sugerido, crse_sugerido)]["schd"]
+                        metodos_permitidos = cat_avanzado[(subj_sugerido, crse_sugerido)]["insm"]
+                        
                         if horarios_permitidos:
-                            if horario_original in horarios_permitidos:
-                                comentario_horario = "Horario OK"
+                            if horario_original in horarios_permitidos: comentario_horario = "Horario OK"
                             else:
-                                comentario_horario = (
-                                    "Error. Valores permitidos: "
-                                    f"{', '.join(sorted(horarios_permitidos))}"
-                                )
-
-                                if len(horarios_permitidos) == 1:
-                                    horario_sugerido = sorted(
-                                        horarios_permitidos
-                                    )[0]
-                                else:
-                                    horario_sugerido = ""
-
-                        else:
-                            comentario_horario = (
-                                "Sin restricciones en catálogo"
-                            )
+                                comentario_horario = f"Error. Permitidos: {', '.join(sorted(horarios_permitidos))}"
+                                horario_sugerido = sorted(horarios_permitidos)[0] if len(horarios_permitidos) == 1 else ""
+                        else: comentario_horario = "Sin restricciones en catálogo"
 
                         if metodos_permitidos:
-                            if metodo_original in metodos_permitidos:
-                                comentario_metodo = "Método OK"
+                            if metodo_original in metodos_permitidos: comentario_metodo = "Método OK"
                             else:
-                                comentario_metodo = (
-                                    "Error. Valores permitidos: "
-                                    f"{', '.join(sorted(metodos_permitidos))}"
-                                )
-
-                                if len(metodos_permitidos) == 1:
-                                    metodo_sugerido = sorted(
-                                        metodos_permitidos
-                                    )[0]
-                                else:
-                                    metodo_sugerido = ""
-
-                        else:
-                            comentario_metodo = (
-                                "Sin restricciones en catálogo"
-                            )
+                                comentario_metodo = f"Error. Permitidos: {', '.join(sorted(metodos_permitidos))}"
+                                metodo_sugerido = sorted(metodos_permitidos)[0] if len(metodos_permitidos) == 1 else ""
+                        else: comentario_metodo = "Sin restricciones en catálogo"
 
                     resultados.append({
-                        "Luz Verde": False,
-                        "idx": idx,
-                        "Archivo": fila.get("ArchivoOrigen"),
-                        "Materia Excel": materia_excel,
-                        "Materia Catálogo": materia_catalogo,
-                        "Comentario Nombres": comentario_nombres,
-                        "Subj Original": subj_original,
-                        "Crse Original": crse_original,
-                        "Subj Sugerido": subj_sugerido,
-                        "Crse Sugerido": crse_sugerido,
-                        "Horario Original": horario_original,
-                        "Horario Sugerido": horario_sugerido,
-                        "Comentario Horario": comentario_horario,
-                        "Método Original": metodo_original,
-                        "Método Sugerido": metodo_sugerido,
-                        "Comentario Método": comentario_metodo,
-                        "Llave_Cruce": (
-                            f"{fila.get('ArchivoOrigen')}|"
-                            f"{materia_excel}|"
-                            f"{subj_original}|"
-                            f"{crse_original}|"
-                            f"{idx}"
-                        )
+                        "Luz Verde": False, "idx": idx, "Archivo": fila.get("ArchivoOrigen"),
+                        "Materia Excel": materia_excel, "Materia Catálogo": materia_catalogo, "Comentario Nombres": comentario_nombres,
+                        "Subj Original": subj_original, "Crse Original": crse_original, "Subj Sugerido": subj_sugerido, "Crse Sugerido": crse_sugerido,
+                        "Horario Original": horario_original, "Horario Sugerido": horario_sugerido, "Comentario Horario": comentario_horario,
+                        "Método Original": metodo_original, "Método Sugerido": metodo_sugerido, "Comentario Método": comentario_metodo,
+                        "Llave_Cruce": f"{fila.get('ArchivoOrigen')}|{materia_excel}|{subj_original}|{crse_original}|{idx}"
                     })
 
-                st.session_state.res_auditoria = pd.DataFrame(
-                    resultados
-                )
-
+                st.session_state.res_auditoria = pd.DataFrame(resultados)
                 st.success("¡Revisión de catálogos finalizada!")
-
             else:
-                st.error(
-                    "❌ Ninguno de los archivos subidos tiene filas "
-                    f"válidas en la pestaña '{HOJA_ALTAS}'."
-                )
+                st.error(f"❌ Ninguno de los archivos subidos tiene filas válidas en la pestaña '{HOJA_ALTAS}'.")
 
-    # ============================================================
-    # MESA DE CONTROL Y GENERACIÓN DE CSV DE LOS EXCEL
-    # ============================================================
+    # --- 5. MESA DE CONTROL (REVISIÓN DE ERRORES) ---
     if st.session_state.res_auditoria is not None:
-        st.markdown(
-            "### ⚖️ Mesa de Control (Dividida en 2 Partes)"
-        )
-
+        st.markdown("### ⚖️ Mesa de Control (Dividida en 2 Partes)")
         df_auditoria = st.session_state.res_auditoria
-        archivos_subidos = df_auditoria["Archivo"].unique()
-
-        for archivo in archivos_subidos:
-            df_archivo = df_auditoria[
-                df_auditoria["Archivo"] == archivo
-            ]
-
-            cond_nombres = ~df_archivo[
-                "Comentario Nombres"
-            ].isin([
-                "Nombre y Claves OK",
-                "Todo correcto (Cat. Básico)"
-            ])
-
-            cond_horario = ~df_archivo[
-                "Comentario Horario"
-            ].isin([
-                "Horario OK",
-                "Sin restricciones en catálogo",
-                "Sin catálogo para validar"
-            ])
-
-            cond_metodo = ~df_archivo[
-                "Comentario Método"
-            ].isin([
-                "Método OK",
-                "Sin restricciones en catálogo",
-                "Sin catálogo para validar"
-            ])
-
-            filas_con_error = df_archivo[
-                cond_nombres | cond_horario | cond_metodo
-            ]
-
+        
+        for archivo in df_auditoria["Archivo"].unique():
+            df_archivo = df_auditoria[df_auditoria["Archivo"] == archivo]
+            filas_con_error = df_archivo[(~df_archivo["Comentario Nombres"].isin(["Nombre y Claves OK", "Todo correcto (Cat. Básico)"])) | 
+                                         (~df_archivo["Comentario Horario"].isin(["Horario OK", "Sin restricciones en catálogo", "Sin catálogo para validar"])) | 
+                                         (~df_archivo["Comentario Método"].isin(["Método OK", "Sin restricciones en catálogo", "Sin catálogo para validar"]))]
+            
             if filas_con_error.empty:
-                st.success(
-                    f"✅ **{archivo}** — "
-                    "Claves, horarios y métodos validados."
-                )
-
+                st.success(f"✅ **{archivo}** — Claves, horarios y métodos validados.")
             else:
-                with st.expander(
-                    f"⚠️ **{archivo}** — "
-                    f"({len(filas_con_error)} advertencias detectadas)",
-                    expanded=True
-                ):
-                    df_vista = filas_con_error.copy()
-
+                with st.expander(f"⚠️ **{archivo}** — ({len(filas_con_error)} advertencias detectadas)", expanded=True):
                     with st.form(key=f"form_{archivo}"):
-                        col_nombres, col_metodos = st.tabs([
-                            "PARTE 1: Nombres y Claves",
-                            "PARTE 2: Métodos y Horarios"
-                        ])
-
+                        col_nombres, col_metodos = st.tabs(["PARTE 1: Nombres y Claves", "PARTE 2: Métodos y Horarios"])
                         with col_nombres:
-                            columnas_nombres = [
-                                "Luz Verde",
-                                "Materia Excel",
-                                "Materia Catálogo",
-                                "Comentario Nombres",
-                                "Subj Original",
-                                "Crse Original",
-                                "Subj Sugerido",
-                                "Crse Sugerido"
-                            ]
-
-                            df_editado_nombres = st.data_editor(
-                                df_vista[columnas_nombres],
-                                hide_index=True,
-                                disabled=[
-                                    "Materia Excel",
-                                    "Materia Catálogo",
-                                    "Comentario Nombres",
-                                    "Subj Original",
-                                    "Crse Original"
-                                ],
-                                column_config={
-                                    "Luz Verde":
-                                    st.column_config.CheckboxColumn(
-                                        "¿Aplicar?"
-                                    )
-                                },
-                                key=f"edit_nom_{archivo}",
-                                use_container_width=True
-                            )
-
+                            df_editado_nombres = st.data_editor(filas_con_error[["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario Nombres", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]], hide_index=True, disabled=["Materia Excel", "Materia Catálogo", "Comentario Nombres", "Subj Original", "Crse Original"], column_config={"Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?")}, key=f"edit_nom_{archivo}", use_container_width=True)
                         with col_metodos:
-                            columnas_metodos = [
-                                "Luz Verde",
-                                "Materia Excel",
-                                "Horario Original",
-                                "Horario Sugerido",
-                                "Comentario Horario",
-                                "Método Original",
-                                "Método Sugerido",
-                                "Comentario Método"
-                            ]
-
-                            df_editado_metodos = st.data_editor(
-                                df_vista[columnas_metodos],
-                                hide_index=True,
-                                disabled=[
-                                    "Materia Excel",
-                                    "Horario Original",
-                                    "Comentario Horario",
-                                    "Método Original",
-                                    "Comentario Método"
-                                ],
-                                column_config={
-                                    "Luz Verde":
-                                    st.column_config.CheckboxColumn(
-                                        "¿Aplicar?"
-                                    )
-                                },
-                                key=f"edit_met_{archivo}",
-                                use_container_width=True
-                            )
-
-                        if st.form_submit_button(
-                            "💾 Confirmar Selección de Ambas Pestañas"
-                        ):
-                            df_final_edits = df_vista.copy()
-
-                            df_final_edits["Luz Verde"] = (
-                                df_editado_nombres["Luz Verde"]
-                                | df_editado_metodos["Luz Verde"]
-                            )
-
-                            df_final_edits["Subj Sugerido"] = (
-                                df_editado_nombres["Subj Sugerido"]
-                            )
-
-                            df_final_edits["Crse Sugerido"] = (
-                                df_editado_nombres["Crse Sugerido"]
-                            )
-
-                            df_final_edits["Horario Sugerido"] = (
-                                df_editado_metodos["Horario Sugerido"]
-                            )
-
-                            df_final_edits["Método Sugerido"] = (
-                                df_editado_metodos["Método Sugerido"]
-                            )
-
-                            df_master = (
-                                st.session_state.res_auditoria.copy()
-                            )
-
-                            df_master.set_index(
-                                "Llave_Cruce",
-                                inplace=True
-                            )
-
-                            df_final_edits.set_index(
-                                "Llave_Cruce",
-                                inplace=True
-                            )
-
-                            df_master.update(
-                                df_final_edits[
-                                    [
-                                        "Luz Verde",
-                                        "Subj Sugerido",
-                                        "Crse Sugerido",
-                                        "Horario Sugerido",
-                                        "Método Sugerido"
-                                    ]
-                                ]
-                            )
-
-                            st.session_state.res_auditoria = (
-                                df_master.reset_index()
-                            )
-
+                            df_editado_metodos = st.data_editor(filas_con_error[["Luz Verde", "Materia Excel", "Horario Original", "Horario Sugerido", "Comentario Horario", "Método Original", "Método Sugerido", "Comentario Método"]], hide_index=True, disabled=["Materia Excel", "Horario Original", "Comentario Horario", "Método Original", "Comentario Método"], column_config={"Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?")}, key=f"edit_met_{archivo}", use_container_width=True)
+                        
+                        if st.form_submit_button("💾 Confirmar Selección de Ambas Pestañas"):
+                            df_final_edits = filas_con_error.copy()
+                            df_final_edits["Luz Verde"] = df_editado_nombres["Luz Verde"] | df_editado_metodos["Luz Verde"]
+                            df_final_edits[["Subj Sugerido", "Crse Sugerido"]] = df_editado_nombres[["Subj Sugerido", "Crse Sugerido"]]
+                            df_final_edits[["Horario Sugerido", "Método Sugerido"]] = df_editado_metodos[["Horario Sugerido", "Método Sugerido"]]
+                            
+                            df_master = st.session_state.res_auditoria.copy().set_index("Llave_Cruce")
+                            df_final_edits.set_index("Llave_Cruce", inplace=True)
+                            df_master.update(df_final_edits[["Luz Verde", "Subj Sugerido", "Crse Sugerido", "Horario Sugerido", "Método Sugerido"]])
+                            st.session_state.res_auditoria = df_master.reset_index()
                             st.rerun()
 
-        # ============================================================
-        # GENERADOR DE CSV PARA LOS ARCHIVOS ALTAS
-        # ============================================================
-        if st.button(
-            "💾 Generar Bloque de Archivos CSV",
-            type="primary",
-            key="btn_generar_bloque_csv"
-        ):
+        # --- 6. GENERADOR MASIVO DE CSV ---
+        if st.button("💾 Generar Bloque de Archivos CSV", type="primary", key="btn_generar_bloque_csv"):
             st.session_state.ready_for_download = False
-
             corregido = st.session_state.raw_altas.copy()
+            for col in ["Subject", "Course", "Tipo de Horario", "Método Educativo"]: 
+                if col in corregido.columns: corregido[col] = corregido[col].astype(str)
 
-            for col in [
-                "Subject",
-                "Course",
-                "Tipo de Horario",
-                "Método Educativo"
-            ]:
-                if col in corregido.columns:
-                    corregido[col] = corregido[col].astype(str)
-
-            for _, fila in st.session_state.res_auditoria.iterrows():
-                if fila["Luz Verde"]:
-                    if pd.notna(fila["Subj Sugerido"]):
-                        corregido.loc[
-                            fila["idx"],
-                            "Subject"
-                        ] = str(fila["Subj Sugerido"])
-
-                    if pd.notna(fila["Crse Sugerido"]):
-                        corregido.loc[
-                            fila["idx"],
-                            "Course"
-                        ] = str(fila["Crse Sugerido"])
-
-                    if (
-                        pd.notna(fila["Horario Sugerido"])
-                        and fila["Horario Sugerido"] != ""
-                    ):
-                        corregido.loc[
-                            fila["idx"],
-                            "Tipo de Horario"
-                        ] = str(fila["Horario Sugerido"])
-
-                    if (
-                        pd.notna(fila["Método Sugerido"])
-                        and fila["Método Sugerido"] != ""
-                    ):
-                        corregido.loc[
-                            fila["idx"],
-                            "Método Educativo"
-                        ] = str(fila["Método Sugerido"])
-
-            columnas_requeridas_csv = [
-                "Periodo",
-                "Campus",
-                "Subject",
-                "Course",
-                "Nivel",
-                "Parte de Periodo",
-                "Estatus",
-                "Capacidad",
-                "Sección",
-                "Tipo de Horario",
-                "Método Educativo",
-                "Modo de Calificar",
-                "Sesion",
-                "Clúster"
-            ]
+            for _, fila in st.session_state.res_auditoria[st.session_state.res_auditoria["Luz Verde"]].iterrows():
+                if pd.notna(fila["Subj Sugerido"]): corregido.loc[fila["idx"], "Subject"] = str(fila["Subj Sugerido"])
+                if pd.notna(fila["Crse Sugerido"]): corregido.loc[fila["idx"], "Course"] = str(fila["Crse Sugerido"])
+                if pd.notna(fila["Horario Sugerido"]) and fila["Horario Sugerido"] != "": corregido.loc[fila["idx"], "Tipo de Horario"] = str(fila["Horario Sugerido"])
+                if pd.notna(fila["Método Sugerido"]) and fila["Método Sugerido"] != "": corregido.loc[fila["idx"], "Método Educativo"] = str(fila["Método Sugerido"])
 
             def preparar_csv_banner(df_origen):
-                resultado_df = pd.DataFrame()
+                res = pd.DataFrame()
+                res["PERIODO"] = df_origen["Periodo"].apply(format_r_string)
+                res["SEDE"] = df_origen["Campus"].apply(format_r_string)
+                res["SUBJ"] = df_origen["Subject"].apply(sin_espacios)
+                res["COURSE"] = df_origen["Course"].apply(sin_espacios)
+                res["PARTEPERIODO"] = df_origen["Parte de Periodo"].apply(format_r_string)
+                res["STATUS"] = df_origen["Estatus"].apply(format_r_string)
+                res["CAPACIDAD"] = pd.to_numeric(df_origen["Capacidad"], errors="coerce").astype("Int64")
+                res["GRUPOS"] = pd.Series(1, index=res.index, dtype="Int64")
+                res["SECCION"] = pd.to_numeric(df_origen["Sección"], errors="coerce").astype("Int64")
+                res["TIPODEHORARIO"] = df_origen["Tipo de Horario"].apply(sin_espacios)
+                res["METODO_EDUCATIVO"] = df_origen["Método Educativo"].apply(sin_espacios)
+                res["SOCIODEINTEGRACION"] = "D2L"
+                res["MODODECALIFICAR"] = df_origen["Modo de Calificar"].apply(format_r_string)
+                res["SESION"] = df_origen["Sesion"].apply(format_r_string)
+                res["datocomplementario"] = df_origen.apply(lambda f: "BACHILLERATO" if "BACHILLERATO" in str(f.get("Nivel", "")).upper() else format_r_string(f.get("Clúster")), axis=1)
+                
+                # Limpiar texto
+                for col in res.columns: res[col] = res[col].astype(str).str.replace('"', "").str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
+                return res[["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS", "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO", "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION", "datocomplementario"]].to_csv(**CSV_KWARGS_R)
 
-                resultado_df["PERIODO"] = df_origen[
-                    "Periodo"
-                ].apply(format_r_string)
-
-                resultado_df["SEDE"] = df_origen[
-                    "Campus"
-                ].apply(format_r_string)
-
-                resultado_df["SUBJ"] = df_origen[
-                    "Subject"
-                ].apply(sin_espacios)
-
-                resultado_df["COURSE"] = df_origen[
-                    "Course"
-                ].apply(sin_espacios)
-
-                resultado_df["PARTEPERIODO"] = df_origen[
-                    "Parte de Periodo"
-                ].apply(format_r_string)
-
-                resultado_df["STATUS"] = df_origen[
-                    "Estatus"
-                ].apply(format_r_string)
-
-                resultado_df["CAPACIDAD"] = pd.to_numeric(
-                    df_origen["Capacidad"],
-                    errors="coerce"
-                ).astype("Int64")
-
-                resultado_df["GRUPOS"] = pd.Series(
-                    1,
-                    index=resultado_df.index,
-                    dtype="Int64"
-                )
-
-                resultado_df["SECCION"] = pd.to_numeric(
-                    df_origen["Sección"],
-                    errors="coerce"
-                ).astype("Int64")
-
-                resultado_df["TIPODEHORARIO"] = df_origen[
-                    "Tipo de Horario"
-                ].apply(sin_espacios)
-
-                resultado_df["METODO_EDUCATIVO"] = df_origen[
-                    "Método Educativo"
-                ].apply(sin_espacios)
-
-                resultado_df["SOCIODEINTEGRACION"] = "D2L"
-
-                resultado_df["MODODECALIFICAR"] = df_origen[
-                    "Modo de Calificar"
-                ].apply(format_r_string)
-
-                resultado_df["SESION"] = df_origen[
-                    "Sesion"
-                ].apply(format_r_string)
-
-                def aplicar_reglas_cluster(fila):
-                    nivel_actual = str(
-                        fila.get("Nivel", "")
-                    ).strip().upper()
-
-                    cluster = format_r_string(
-                        fila.get("Clúster")
-                    )
-
-                    if "BACHILLERATO" in nivel_actual:
-                        return "BACHILLERATO"
-
-                    return cluster
-
-                resultado_df["datocomplementario"] = (
-                    df_origen.apply(
-                        aplicar_reglas_cluster,
-                        axis=1
-                    )
-                )
-
-                columnas_ordenadas = [
-                    "PERIODO",
-                    "SEDE",
-                    "SUBJ",
-                    "COURSE",
-                    "PARTEPERIODO",
-                    "STATUS",
-                    "CAPACIDAD",
-                    "GRUPOS",
-                    "SECCION",
-                    "TIPODEHORARIO",
-                    "METODO_EDUCATIVO",
-                    "SOCIODEINTEGRACION",
-                    "MODODECALIFICAR",
-                    "SESION",
-                    "datocomplementario"
-                ]
-
-                resultado_df = resultado_df[
-                    columnas_ordenadas
-                ]
-
-                for col in resultado_df.columns:
-                    resultado_df[col] = (
-                        resultado_df[col]
-                        .astype(str)
-                        .str.replace('"', "", regex=False)
-                        .str.strip()
-                        .replace(
-                            ["nan", "None", "<NA>", "NaN"],
-                            ""
-                        )
-                    )
-
-                return resultado_df.to_csv(**CSV_KWARGS_R)
-
-            st.session_state.csv_files_to_download = {}
-            st.session_state.zip_file_bytes = None
-            st.session_state.csv_consolidado_bytes = None
-
+            st.session_state.csv_files_to_download, st.session_state.zip_file_bytes, st.session_state.csv_consolidado_bytes = {}, None, None
             errores_encontrados = False
+            columnas_requeridas_csv = ["Periodo", "Campus", "Subject", "Course", "Nivel", "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"]
 
             if modo_salida_csv == "Un CSV por cada Excel":
                 zip_buffer = io.BytesIO()
-
-                with zipfile.ZipFile(
-                    zip_buffer,
-                    "w",
-                    zipfile.ZIP_DEFLATED
-                ) as zip_file:
-
-                    for nombre_archivo, sub in corregido.groupby(
-                        "ArchivoOrigen"
-                    ):
-                        faltantes = [
-                            col for col in columnas_requeridas_csv
-                            if col not in sub.columns
-                        ]
-
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for nom_arch, sub in corregido.groupby("ArchivoOrigen"):
+                        faltantes = [c for c in columnas_requeridas_csv if c not in sub.columns]
                         if faltantes:
-                            st.error(
-                                f"❌ Error en `{nombre_archivo}`. "
-                                f"Faltan columnas: {', '.join(faltantes)}."
-                            )
-
-                            errores_encontrados = True
-                            continue
-
+                            st.error(f"❌ Error en `{nom_arch}`. Faltan columnas: {', '.join(faltantes)}."); errores_encontrados = True; continue
                         csv_string = preparar_csv_banner(sub)
-
-                        nombre_csv = (
-                            f"{nombre_archivo.rsplit('.', 1)[0]}.csv"
-                            if "." in nombre_archivo
-                            else f"{nombre_archivo}.csv"
-                        )
-
-                        zip_file.writestr(
-                            nombre_csv,
-                            csv_string.encode("utf-8")
-                        )
-
-                        st.session_state.csv_files_to_download[
-                            nombre_csv
-                        ] = csv_string.encode("utf-8")
-
-                if not errores_encontrados:
-                    st.session_state.zip_file_bytes = (
-                        zip_buffer.getvalue()
-                    )
-
+                        nombre_csv = f"{nom_arch.rsplit('.', 1)[0]}.csv" if "." in nom_arch else f"{nom_arch}.csv"
+                        zip_file.writestr(nombre_csv, csv_string.encode("utf-8"))
+                        st.session_state.csv_files_to_download[nombre_csv] = csv_string.encode("utf-8")
+                if not errores_encontrados: st.session_state.zip_file_bytes = zip_buffer.getvalue()
             else:
-                errores_columnas = []
-
-                for nombre_archivo, sub in corregido.groupby(
-                    "ArchivoOrigen"
-                ):
-                    faltantes = [
-                        col for col in columnas_requeridas_csv
-                        if col not in sub.columns
-                    ]
-
-                    if faltantes:
-                        errores_columnas.append(
-                            f"`{nombre_archivo}`: "
-                            f"{', '.join(faltantes)}"
-                        )
-
-                if errores_columnas:
-                    for detalle in errores_columnas:
-                        st.error(
-                            f"❌ Faltan columnas en {detalle}."
-                        )
-
-                    errores_encontrados = True
-
-                else:
-                    csv_string = preparar_csv_banner(corregido)
-
-                    st.session_state.csv_consolidado_bytes = (
-                        csv_string.encode("utf-8")
-                    )
+                for nom_arch, sub in corregido.groupby("ArchivoOrigen"):
+                    faltantes = [c for c in columnas_requeridas_csv if c not in sub.columns]
+                    if faltantes: st.error(f"❌ Faltan columnas en `{nom_arch}`: {', '.join(faltantes)}"); errores_encontrados = True
+                if not errores_encontrados: st.session_state.csv_consolidado_bytes = preparar_csv_banner(corregido).encode("utf-8")
 
             if not errores_encontrados:
                 st.session_state.ready_for_download = True
-
-                st.session_state.modo_salida_csv_generado = (
-                    modo_salida_csv
-                )
-
+                st.session_state.modo_salida_csv_generado = modo_salida_csv
                 st.rerun()
 
-        # ============================================================
-        # DESCARGA DE CSV DE LOS ARCHIVOS ALTAS
-        # ============================================================
+        # Panel de descargas Masivo
         if st.session_state.ready_for_download:
             st.markdown("### 📥 Panel de Descarga")
-
-            modo_descarga = (
-                st.session_state.modo_salida_csv_generado
-                or modo_salida_csv
-            )
-
-            if modo_descarga == "Un CSV por cada Excel":
-                st.download_button(
-                    "📥 Descargar todos los CSV (.ZIP)",
-                    data=st.session_state.zip_file_bytes,
-                    file_name="archivos_carga_banner.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                    type="primary",
-                    key="dl_todos_csv_zip"
-                )
-
+            modo_desc = st.session_state.modo_salida_csv_generado or modo_salida_csv
+            if modo_desc == "Un CSV por cada Excel":
+                st.download_button("📥 Descargar todos los CSV (.ZIP)", data=st.session_state.zip_file_bytes, file_name="archivos_carga_banner.zip", mime="application/zip", use_container_width=True, type="primary", key="dl_todos_csv_zip")
             else:
-                st.download_button(
-                    "📥 Descargar CSV consolidado",
-                    data=st.session_state.csv_consolidado_bytes,
-                    file_name="archivos_carga_banner.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    type="primary",
-                    key="dl_csv_consolidado"
-                )
+                st.download_button("📥 Descargar CSV consolidado", data=st.session_state.csv_consolidado_bytes, file_name="archivos_carga_banner.csv", mime="text/csv", use_container_width=True, type="primary", key="dl_csv_consolidado")
 
     # ============================================================
-    # MÓDULO MANUAL O VISUALIZADOR DE EXCEL
+    # --- 7. MÓDULO MANUAL (BUSCADOR FLEXIBLE CON FORMULARIO) ---
     # ============================================================
     st.markdown("---")
-
     tiene_archivos_altas = bool(files_altas)
+    
+    st.subheader("Visualizador de ALTAS y agregar registro" if tiene_archivos_altas else "Creación de CSV Manual")
+    st.caption("Agrega materias sueltas. Si buscas, el sistema autocompletará las opciones de horario y método.")
 
-    if tiene_archivos_altas:
-        st.subheader("Visualizador de ALTAS y agregar registro")
-        st.caption(
-            "Elige el Excel que deseas visualizar. "
-            "La materia encontrada se agregará solamente "
-            "a ese archivo."
-        )
-    else:
-        st.subheader("Creación de CSV Manual")
-        st.caption(
-            "No hay archivos ALTAS cargados. "
-            "Las materias se agregarán a un CSV manual independiente."
-        )
+    if "df_manual_fijo" not in st.session_state: st.session_state.df_manual_fijo = pd.DataFrame(columns=["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS", "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO", "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION", "datocomplementario"])
+    if "manual_candidatos" not in st.session_state: st.session_state.manual_candidatos = []
+    if "manual_busqueda_realizada" not in st.session_state: st.session_state.manual_busqueda_realizada = False
 
-    columnas_manual = [
-        "PERIODO",
-        "SEDE",
-        "SUBJ",
-        "COURSE",
-        "PARTEPERIODO",
-        "STATUS",
-        "CAPACIDAD",
-        "GRUPOS",
-        "SECCION",
-        "TIPODEHORARIO",
-        "METODO_EDUCATIVO",
-        "SOCIODEINTEGRACION",
-        "MODODECALIFICAR",
-        "SESION",
-        "datocomplementario"
-    ]
-
-    if "df_manual_fijo" not in st.session_state:
-        st.session_state.df_manual_fijo = pd.DataFrame(
-            columns=columnas_manual
-        )
-
-    if "manual_candidatos" not in st.session_state:
-        st.session_state.manual_candidatos = []
-
-    if "manual_busqueda_realizada" not in st.session_state:
-        st.session_state.manual_busqueda_realizada = False
-
-    # ============================================================
-    # SELECTOR DEL EXCEL A VISUALIZAR
-    # ============================================================
     archivo_destino_manual = None
-
     if tiene_archivos_altas:
-        if st.session_state.raw_altas is None:
-            st.info(
-                "Para visualizar y agregar registros al Excel, "
-                "primero ejecuta la Validación Inteligente."
-            )
-
+        if st.session_state.raw_altas is None: st.info("Para agregar registros al Excel, primero ejecuta la Validación Inteligente arriba.")
         else:
-            archivos_disponibles = sorted(
-                st.session_state.raw_altas[
-                    "ArchivoOrigen"
-                ].dropna().unique().tolist()
-            )
+            archivos_disp = sorted(st.session_state.raw_altas["ArchivoOrigen"].dropna().unique().tolist())
+            if archivos_disp and st.session_state.get("manual_archivo_visualizado") not in archivos_disp: st.session_state.manual_archivo_visualizado = archivos_disp[0]
+            archivo_destino_manual = st.selectbox("Excel que deseas visualizar y completar", options=archivos_disp, key="manual_archivo_visualizado")
 
-            if archivos_disponibles:
-                if (
-                    st.session_state.get(
-                        "manual_archivo_visualizado"
-                    )
-                    not in archivos_disponibles
-                ):
-                    st.session_state.manual_archivo_visualizado = (
-                        archivos_disponibles[0]
-                    )
-
-                archivo_destino_manual = st.selectbox(
-                    "Excel que deseas visualizar y completar",
-                    options=archivos_disponibles,
-                    key="manual_archivo_visualizado"
-                )
-
-    # ============================================================
-    # BUSCADOR DE COINCIDENCIAS DEL CATÁLOGO AVANZADO
-    # ============================================================
-    def buscar_candidatos_manual(
-        cat_avanzado,
-        nombre,
-        subj,
-        crse,
-        limite=20
-    ):
-        nombre_norm = (
-            normalizar_para_busqueda(nombre)
-            if nombre
-            else ""
-        )
-
-        subj_norm = (
-            normalizar_para_busqueda(subj)
-            if subj
-            else ""
-        )
-
-        crse_norm = (
-            normalizar_para_busqueda(crse)
-            if crse
-            else ""
-        )
-
+    def buscar_candidatos_manual(cat_avanzado, nombre, subj, crse, limite=20):
+        nombre_norm, subj_norm, crse_norm = normalizar_para_busqueda(nombre) if nombre else "", normalizar_para_busqueda(subj) if subj else "", normalizar_para_busqueda(crse) if crse else ""
         resultados = []
-
         for (subj_cat, crse_cat), info in cat_avanzado.items():
-            subj_cat_norm = normalizar_para_busqueda(subj_cat)
-            crse_cat_norm = normalizar_para_busqueda(crse_cat)
-
-            puntaje = 0.0
-            campos_consultados = 0
-
+            subj_cat_norm, crse_cat_norm, puntaje, campos = normalizar_para_busqueda(subj_cat), normalizar_para_busqueda(crse_cat), 0.0, 0
             if subj_norm:
-                similitud_subj = (
-                    1.0
-                    if subj_norm == subj_cat_norm
-                    else similitud(subj_norm, subj_cat_norm)
-                )
-
-                if (
-                    subj_norm in subj_cat_norm
-                    or subj_cat_norm in subj_norm
-                ):
-                    similitud_subj = max(
-                        similitud_subj,
-                        0.95
-                    )
-
-                if similitud_subj < 0.55:
-                    continue
-
-                puntaje += similitud_subj
-                campos_consultados += 1
-
+                sim = max(1.0 if subj_norm == subj_cat_norm else similitud(subj_norm, subj_cat_norm), 0.95 if subj_norm in subj_cat_norm or subj_cat_norm in subj_norm else 0.0)
+                if sim < 0.55: continue
+                puntaje += sim; campos += 1
             if crse_norm:
-                similitud_crse = (
-                    1.0
-                    if crse_norm == crse_cat_norm
-                    else similitud(crse_norm, crse_cat_norm)
-                )
-
-                if (
-                    crse_norm in crse_cat_norm
-                    or crse_cat_norm in crse_norm
-                ):
-                    similitud_crse = max(
-                        similitud_crse,
-                        0.95
-                    )
-
-                if similitud_crse < 0.55:
-                    continue
-
-                puntaje += similitud_crse
-                campos_consultados += 1
-
+                sim = max(1.0 if crse_norm == crse_cat_norm else similitud(crse_norm, crse_cat_norm), 0.95 if crse_norm in crse_cat_norm or crse_cat_norm in crse_norm else 0.0)
+                if sim < 0.55: continue
+                puntaje += sim; campos += 1
+            
             titulos = sorted(info["titles"])
-            titulo_elegido = (
-                titulos[0]
-                if titulos
-                else "SIN TÍTULO"
-            )
-
+            titulo_elegido = titulos[0] if titulos else "SIN TÍTULO"
             if nombre_norm:
-                similitud_titulo = max(
-                    [
-                        similitud(
-                            nombre_norm,
-                            normalizar_para_busqueda(titulo)
-                        )
-                        for titulo in titulos
-                    ] or [0.0]
-                )
+                sim = max([similitud(nombre_norm, normalizar_para_busqueda(t)) for t in titulos] or [0.0])
+                if any(nombre_norm in normalizar_para_busqueda(t) for t in titulos): sim = max(sim, 0.95)
+                if sim < 0.40 and not subj_norm and not crse_norm: continue
+                puntaje += sim; campos += 1
+                
+            if campos: resultados.append({"llave": (subj_cat, crse_cat), "titulo": titulo_elegido, "puntaje": puntaje / campos})
+        return sorted(resultados, key=lambda d: (-d["puntaje"], d["llave"]))[:limite]
 
-                if any(
-                    nombre_norm
-                    in normalizar_para_busqueda(titulo)
-                    for titulo in titulos
-                ):
-                    similitud_titulo = max(
-                        similitud_titulo,
-                        0.95
-                    )
+    # ST.FORM: ESTO EVITA QUE SE PIERDA EL TEXTO AL ESCRIBIR
+    st.markdown("#### 🔍 Buscador de materia")
+    with st.form("form_buscador_manual"):
+        col_busq1, col_busq2, col_busq3 = st.columns(3)
+        input_nombre_busq = col_busq1.text_input("Nombre o título", key="input_nom_busq").strip()
+        input_subj_busq = col_busq2.text_input("SUBJ", key="input_subj_busq").strip()
+        input_crse_busq = col_busq3.text_input("COURSE", key="input_crse_busq").strip()
+        
+        btn_buscar_manual = st.form_submit_button("🪄 Buscar opciones", type="secondary", use_container_width=True)
 
-                if (
-                    similitud_titulo < 0.40
-                    and not subj_norm
-                    and not crse_norm
-                ):
-                    continue
-
-                puntaje += similitud_titulo
-                campos_consultados += 1
-
-            if campos_consultados:
-                resultados.append({
-                    "llave": (subj_cat, crse_cat),
-                    "titulo": titulo_elegido,
-                    "puntaje": puntaje / campos_consultados
-                })
-
-        return sorted(
-            resultados,
-            key=lambda dato: (
-                -dato["puntaje"],
-                dato["llave"]
-            )
-        )[:limite]
-
-    # ============================================================
-    # CAMPOS DEL BUSCADOR
-    # ============================================================
-    st.markdown("#### Buscador de materia")
-
-    col_busq1, col_busq2, col_busq3 = st.columns(3)
-
-    with col_busq1:
-        input_nombre_busq = st.text_input(
-            "Nombre o título",
-            key="input_nom_busq"
-        ).strip()
-
-    with col_busq2:
-        input_subj_busq = st.text_input(
-            "SUBJ",
-            key="input_subj_busq"
-        ).strip()
-
-    with col_busq3:
-        input_crse_busq = st.text_input(
-            "COURSE",
-            key="input_crse_busq"
-        ).strip()
-
-    if st.button(
-        "Buscar opciones",
-        type="secondary",
-        use_container_width=True,
-        key="btn_buscar_manual"
-    ):
-        if not file_cat_ext:
-            st.warning(
-                "Primero sube el Catálogo Avanzado para poder buscar."
-            )
-
-        elif (
-            not input_nombre_busq
-            and not input_subj_busq
-            and not input_crse_busq
-        ):
-            st.warning(
-                "Ingresa al menos un criterio: "
-                "nombre, SUBJ o COURSE."
-            )
-
+    if btn_buscar_manual:
+        if not file_cat_ext: st.warning("Primero sube el Catálogo Avanzado para buscar.")
+        elif not input_nombre_busq and not input_subj_busq and not input_crse_busq: st.warning("Ingresa al menos un criterio (nombre, SUBJ o COURSE).")
         else:
             cat_avanzado, _ = cargar_catalogo_avanzado()
-
-            st.session_state.manual_candidatos = (
-                buscar_candidatos_manual(
-                    cat_avanzado,
-                    input_nombre_busq,
-                    input_subj_busq,
-                    input_crse_busq
-                )
-            )
-
+            st.session_state.manual_candidatos = buscar_candidatos_manual(cat_avanzado, input_nombre_busq, input_subj_busq, input_crse_busq)
             st.session_state.manual_busqueda_realizada = True
+            st.session_state.pop("manual_materia_seleccionada", None)
 
-            st.session_state.pop(
-                "manual_materia_seleccionada",
-                None
-            )
-
+    # --- 8. ZONA PARA AGREGAR LA MATERIA BUSCADA ---
     candidatos = st.session_state.manual_candidatos
-
-    # ============================================================
-    # SELECCIÓN DE MATERIA, HORARIO, MÉTODO Y DATOS
-    # ============================================================
     if candidatos:
-        opciones_materia = [
-            candidato["llave"]
-            for candidato in candidatos
-        ]
-
-        etiquetas_materia = {
-            candidato["llave"]: (
-                f"{candidato['llave'][0]} "
-                f"{candidato['llave'][1]} - "
-                f"{candidato['titulo']} "
-                f"({candidato['puntaje']:.0%})"
-            )
-            for candidato in candidatos
-        }
-
-        if (
-            st.session_state.get(
-                "manual_materia_seleccionada"
-            )
-            not in opciones_materia
-        ):
-            st.session_state.manual_materia_seleccionada = (
-                opciones_materia[0]
-            )
-
-        llave_materia = st.selectbox(
-            "Selecciona la materia correcta",
-            options=opciones_materia,
-            format_func=lambda llave: etiquetas_materia[llave],
-            key="manual_materia_seleccionada"
-        )
-
+        opc_mat = [c["llave"] for c in candidatos]
+        etiq_mat = {c["llave"]: f"{c['llave'][0]} {c['llave'][1]} - {c['titulo']} ({c['puntaje']:.0%})" for c in candidatos}
+        if st.session_state.get("manual_materia_seleccionada") not in opc_mat: st.session_state.manual_materia_seleccionada = opc_mat[0]
+        
+        llave_materia = st.selectbox("Selecciona la materia correcta", options=opc_mat, format_func=lambda k: etiq_mat[k], key="manual_materia_seleccionada")
+        
         cat_avanzado, _ = cargar_catalogo_avanzado()
-
         info_materia = cat_avanzado[llave_materia]
-
-        horarios_disponibles = (
-            [""] + sorted(info_materia["schd"])
-        )
-
-        metodos_disponibles = (
-            [""] + sorted(info_materia["insm"])
-        )
-
-        if (
-            st.session_state.get("manual_horario")
-            not in horarios_disponibles
-        ):
-            st.session_state.manual_horario = ""
-
-        if (
-            st.session_state.get("manual_metodo")
-            not in metodos_disponibles
-        ):
-            st.session_state.manual_metodo = ""
+        horarios_disp, metodos_disp = [""] + sorted(info_materia["schd"]), [""] + sorted(info_materia["insm"])
+        
+        if st.session_state.get("manual_horario") not in horarios_disp: st.session_state.manual_horario = ""
+        if st.session_state.get("manual_metodo") not in metodos_disp: st.session_state.manual_metodo = ""
 
         st.markdown("#### Datos para agregar la materia")
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            horario_manual = st.selectbox("Tipo de horario", options=horarios_disp, key="manual_horario")
+            periodo_manual = st.text_input("Periodo", key="manual_periodo").strip()
+            parte_periodo_manual = st.text_input("Parte de periodo", key="manual_parte_periodo").strip()
+            capacidad_manual = st.text_input("Capacidad", key="manual_capacidad").strip()
+            seccion_manual = st.text_input("Sección", key="manual_seccion").strip()
+        with col_d2:
+            metodo_manual = st.selectbox("Método educativo", options=metodos_disp, key="manual_metodo")
+            sede_manual = st.text_input("Sede", key="manual_sede").strip()
+            estatus_manual = st.text_input("Estatus", key="manual_estatus").strip()
+            modo_calificar_manual = st.text_input("Modo de calificar", key="manual_modo_calificar").strip()
+            sesion_manual = st.text_input("Sesión", key="manual_sesion").strip()
 
-        col_dato1, col_dato2 = st.columns(2)
+        col_e1, col_e2, col_e3, col_e4 = st.columns(4)
+        with col_e1: grupos_manual = st.number_input("Grupos", min_value=1, value=1, step=1, key="manual_grupos")
+        with col_e2: nivel_manual = st.selectbox("Nivel", options=["LICENCIATURA", "BACHILLERATO", "POSGRADO"], key="manual_nivel")
+        with col_e3: integracion_manual = st.text_input("Socio de integración", value="D2L", key="manual_integracion").strip()
+        with col_e4: cluster_manual = st.text_input("Clúster", key="manual_cluster").strip()
 
-        with col_dato1:
-            horario_manual = st.selectbox(
-                "Tipo de horario",
-                options=horarios_disponibles,
-                key="manual_horario"
-            )
-
-            periodo_manual = st.text_input(
-                "Periodo",
-                key="manual_periodo"
-            ).strip()
-
-            parte_periodo_manual = st.text_input(
-                "Parte de periodo",
-                key="manual_parte_periodo"
-            ).strip()
-
-            capacidad_manual = st.text_input(
-                "Capacidad",
-                key="manual_capacidad"
-            ).strip()
-
-            seccion_manual = st.text_input(
-                "Sección",
-                key="manual_seccion"
-            ).strip()
-
-        with col_dato2:
-            metodo_manual = st.selectbox(
-                "Método educativo",
-                options=metodos_disponibles,
-                key="manual_metodo"
-            )
-
-            sede_manual = st.text_input(
-                "Sede",
-                key="manual_sede"
-            ).strip()
-
-            estatus_manual = st.text_input(
-                "Estatus",
-                key="manual_estatus"
-            ).strip()
-
-            modo_calificar_manual = st.text_input(
-                "Modo de calificar",
-                key="manual_modo_calificar"
-            ).strip()
-
-            sesion_manual = st.text_input(
-                "Sesión",
-                key="manual_sesion"
-            ).strip()
-
-        col_extra1, col_extra2, col_extra3, col_extra4 = st.columns(4)
-
-        with col_extra1:
-            grupos_manual = st.number_input(
-                "Grupos",
-                min_value=1,
-                value=1,
-                step=1,
-                key="manual_grupos"
-            )
-
-        with col_extra2:
-            nivel_manual = st.selectbox(
-                "Nivel",
-                options=[
-                    "LICENCIATURA",
-                    "BACHILLERATO",
-                    "POSGRADO"
-                ],
-                key="manual_nivel"
-            )
-
-        with col_extra3:
-            integracion_manual = st.text_input(
-                "Socio de integración",
-                value="D2L",
-                key="manual_integracion"
-            ).strip()
-
-        with col_extra4:
-            cluster_manual = st.text_input(
-                "Clúster",
-                key="manual_cluster"
-            ).strip()
-
-        if st.button(
-            "Agregar materia seleccionada",
-            type="primary",
-            use_container_width=True,
-            key="btn_agregar_manual"
-        ):
+        if st.button("Agregar materia seleccionada", type="primary", use_container_width=True, key="btn_agregar_manual"):
             nuevo_renglon_manual = pd.DataFrame([{
-                "PERIODO": periodo_manual,
-                "SEDE": sede_manual,
-                "SUBJ": llave_materia[0],
-                "COURSE": llave_materia[1],
-                "PARTEPERIODO": parte_periodo_manual,
-                "STATUS": estatus_manual,
-                "CAPACIDAD": capacidad_manual,
-                "GRUPOS": str(grupos_manual),
-                "SECCION": seccion_manual,
-                "TIPODEHORARIO": horario_manual,
-                "METODO_EDUCATIVO": metodo_manual,
-                "SOCIODEINTEGRACION": integracion_manual or "D2L",
-                "MODODECALIFICAR": modo_calificar_manual,
-                "SESION": sesion_manual,
-                "datocomplementario": (
-                    "BACHILLERATO"
-                    if nivel_manual == "BACHILLERATO"
-                    else cluster_manual
-                )
+                "PERIODO": periodo_manual, "SEDE": sede_manual, "SUBJ": llave_materia[0], "COURSE": llave_materia[1],
+                "PARTEPERIODO": parte_periodo_manual, "STATUS": estatus_manual, "CAPACIDAD": capacidad_manual,
+                "GRUPOS": str(grupos_manual), "SECCION": seccion_manual, "TIPODEHORARIO": horario_manual,
+                "METODO_EDUCATIVO": metodo_manual, "SOCIODEINTEGRACION": integracion_manual or "D2L",
+                "MODODECALIFICAR": modo_calificar_manual, "SESION": sesion_manual,
+                "datocomplementario": "BACHILLERATO" if nivel_manual == "BACHILLERATO" else cluster_manual
             }])
 
-            # ========================================================
-            # CON EXCEL: AGREGAR AL EXCEL SELECCIONADO
-            # ========================================================
             if tiene_archivos_altas:
-                if (
-                    st.session_state.raw_altas is None
-                    or not archivo_destino_manual
-                ):
-                    st.warning(
-                        "Primero ejecuta la validación y "
-                        "selecciona el Excel destino."
-                    )
-
+                if st.session_state.raw_altas is None or not archivo_destino_manual: st.warning("Primero ejecuta la validación y selecciona el Excel destino.")
                 else:
-                    titulo_materia = next(
-                        candidato["titulo"]
-                        for candidato in candidatos
-                        if candidato["llave"] == llave_materia
-                    )
-
-                    nuevo_renglon_excel = {
-                        col: ""
-                        for col in st.session_state.raw_altas.columns
-                    }
-
+                    titulo_mat = next(c["titulo"] for c in candidatos if c["llave"] == llave_materia)
+                    nuevo_renglon_excel = {col: "" for col in st.session_state.raw_altas.columns}
                     nuevo_renglon_excel.update({
-                        "Periodo": periodo_manual,
-                        "Campus": sede_manual,
-                        "Subject": llave_materia[0],
-                        "Course": llave_materia[1],
-                        "Nivel": nivel_manual,
-                        "Nombre de la Materia": titulo_materia,
-                        "Parte de Periodo": parte_periodo_manual,
-                        "Estatus": estatus_manual,
-                        "Capacidad": capacidad_manual,
-                        "Sección": seccion_manual,
-                        "Tipo de Horario": horario_manual,
-                        "Método Educativo": metodo_manual,
-                        "Modo de Calificar": modo_calificar_manual,
-                        "Sesion": sesion_manual,
-                        "Clúster": cluster_manual,
-                        "ArchivoOrigen": archivo_destino_manual
+                        "Periodo": periodo_manual, "Campus": sede_manual, "Subject": llave_materia[0], "Course": llave_materia[1],
+                        "Nivel": nivel_manual, "Nombre de la Materia": titulo_mat, "Parte de Periodo": parte_periodo_manual,
+                        "Estatus": estatus_manual, "Capacidad": capacidad_manual, "Sección": seccion_manual,
+                        "Tipo de Horario": horario_manual, "Método Educativo": metodo_manual, "Modo de Calificar": modo_calificar_manual,
+                        "Sesion": sesion_manual, "Clúster": cluster_manual, "ArchivoOrigen": archivo_destino_manual
                     })
-
-                    st.session_state.raw_altas = pd.concat(
-                        [
-                            st.session_state.raw_altas,
-                            pd.DataFrame([nuevo_renglon_excel])
-                        ],
-                        ignore_index=True
-                    )
-
-                    st.success(
-                        f"Materia agregada al Excel "
-                        f"`{archivo_destino_manual}`."
-                    )
-
-            # ========================================================
-            # SIN EXCEL: AGREGAR A LA TABLA Y CSV MANUAL
-            # ========================================================
+                    st.session_state.raw_altas = pd.concat([st.session_state.raw_altas, pd.DataFrame([nuevo_renglon_excel])], ignore_index=True)
+                    st.success(f"Materia agregada al Excel `{archivo_destino_manual}`.")
             else:
-                st.session_state.df_manual_fijo = pd.concat(
-                    [
-                        st.session_state.df_manual_fijo,
-                        nuevo_renglon_manual
-                    ],
-                    ignore_index=True
-                )
+                st.session_state.df_manual_fijo = pd.concat([st.session_state.df_manual_fijo, nuevo_renglon_manual], ignore_index=True)
+                st.success("Materia agregada a la tabla manual.")
 
-                st.success(
-                    "Materia agregada a la tabla manual."
-                )
+    elif st.session_state.manual_busqueda_realizada: st.info("No se encontraron coincidencias con esos datos.")
 
-    elif st.session_state.manual_busqueda_realizada:
-        st.info(
-            "No se encontraron coincidencias con esos datos."
-        )
-
-    # ============================================================
-    # VISUALIZADOR DEL EXCEL ELEGIDO
-    # ============================================================
-    if (
-        tiene_archivos_altas
-        and st.session_state.raw_altas is not None
-        and archivo_destino_manual
-    ):
+    # --- 9. VISUALIZADOR DE TABLAS (EXCEL O MANUAL) ---
+    if tiene_archivos_altas and st.session_state.raw_altas is not None and archivo_destino_manual:
         st.markdown("#### Vista previa del Excel seleccionado")
+        cols_vis = [c for c in ["Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia", "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"] if c in st.session_state.raw_altas.columns]
+        st.dataframe(st.session_state.raw_altas.loc[st.session_state.raw_altas["ArchivoOrigen"] == archivo_destino_manual, cols_vis], hide_index=True, use_container_width=True)
 
-        columnas_visualizador = [
-            "Periodo",
-            "Campus",
-            "Subject",
-            "Course",
-            "Nivel",
-            "Nombre de la Materia",
-            "Parte de Periodo",
-            "Estatus",
-            "Capacidad",
-            "Sección",
-            "Tipo de Horario",
-            "Método Educativo",
-            "Modo de Calificar",
-            "Sesion",
-            "Clúster"
-        ]
-
-        columnas_visualizador = [
-            col for col in columnas_visualizador
-            if col in st.session_state.raw_altas.columns
-        ]
-
-        st.dataframe(
-            st.session_state.raw_altas.loc[
-                st.session_state.raw_altas[
-                    "ArchivoOrigen"
-                ] == archivo_destino_manual,
-                columnas_visualizador
-            ],
-            hide_index=True,
-            use_container_width=True
-        )
-
-    # ============================================================
-    # TABLA Y CSV MANUAL: SOLO CUANDO NO HAY EXCEL
-    # ============================================================
     if not tiene_archivos_altas:
         st.markdown("#### Tabla manual")
-
-        # ========================================================
-        # COPIAR O ELIMINAR RENGLÓN
-        # ========================================================
         if not st.session_state.df_manual_fijo.empty:
-            indices_renglones = list(
-                st.session_state.df_manual_fijo.index
-            )
+            indices_reng = list(st.session_state.df_manual_fijo.index)
+            if st.session_state.get("manual_renglon_accion") not in indices_reng: st.session_state.manual_renglon_accion = indices_reng[0]
 
-            if (
-                st.session_state.get(
-                    "manual_renglon_accion"
-                )
-                not in indices_renglones
-            ):
-                st.session_state.manual_renglon_accion = (
-                    indices_renglones[0]
-                )
+            col_act1, col_act2, col_act3 = st.columns([3, 1, 1])
+            renglon_accion = col_act1.selectbox("Selecciona el renglón", options=indices_reng, format_func=lambda i: f"Renglón {i + 1}: {st.session_state.df_manual_fijo.loc[i, 'SUBJ']} {st.session_state.df_manual_fijo.loc[i, 'COURSE']}", key="manual_renglon_accion")
+            
+            if col_act2.button("Copiar renglón", use_container_width=True, key="btn_copiar_renglon_manual"):
+                st.session_state.df_manual_fijo = pd.concat([st.session_state.df_manual_fijo, st.session_state.df_manual_fijo.loc[[renglon_accion]].copy()], ignore_index=True)
+                st.success("Se creó una copia del renglón seleccionado.")
+            if col_act3.button("Eliminar renglón", use_container_width=True, key="btn_eliminar_renglon_manual"):
+                st.session_state.df_manual_fijo = st.session_state.df_manual_fijo.drop(index=renglon_accion).reset_index(drop=True)
+                st.success("Se eliminó el renglón seleccionado.")
 
-            col_accion1, col_accion2, col_accion3 = st.columns(
-                [3, 1, 1]
-            )
+        st.session_state.df_manual_fijo = st.data_editor(st.session_state.df_manual_fijo, num_rows="dynamic", use_container_width=True, key="editor_manual_seguro")
 
-            with col_accion1:
-                renglon_accion = st.selectbox(
-                    "Selecciona el renglón",
-                    options=indices_renglones,
-                    format_func=lambda indice: (
-                        f"Renglón {indice + 1}: "
-                        f"{st.session_state.df_manual_fijo.loc[indice, 'SUBJ']} "
-                        f"{st.session_state.df_manual_fijo.loc[indice, 'COURSE']}"
-                    ),
-                    key="manual_renglon_accion"
-                )
+        # --- 10. DESCARGA DEL ARCHIVO MANUAL ---
+        col_nom, col_desc = st.columns([3, 1])
+        nombre_csv_manual = col_nom.text_input("Nombre del archivo:", value="carga_manual.csv", key="nom_manual_seguro")
+        
+        df_out_manual = st.session_state.df_manual_fijo.copy()
+        for col in df_out_manual.columns: df_out_manual[col] = df_out_manual[col].astype(str).str.replace('"', "").str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
+        
+        for col in ["SUBJ", "COURSE", "TIPODEHORARIO", "METODO_EDUCATIVO"]: 
+            if col in df_out_manual.columns: df_out_manual[col] = df_out_manual[col].apply(sin_espacios)
+        if "GRUPOS" in df_out_manual.columns: df_out_manual["GRUPOS"] = df_out_manual["GRUPOS"].replace("", "1")
+        if "SOCIODEINTEGRACION" in df_out_manual.columns: df_out_manual["SOCIODEINTEGRACION"] = df_out_manual["SOCIODEINTEGRACION"].replace("", "D2L")
+        for col_num in ["CAPACIDAD", "SECCION"]:
+            if col_num in df_out_manual.columns: df_out_manual[col_num] = pd.to_numeric(df_out_manual[col_num], errors="coerce").astype("Int64")
 
-            with col_accion2:
-                st.write("")
-
-                if st.button(
-                    "Copiar renglón",
-                    use_container_width=True,
-                    key="btn_copiar_renglon_manual"
-                ):
-                    renglon_copia = (
-                        st.session_state.df_manual_fijo
-                        .loc[[renglon_accion]]
-                        .copy()
-                    )
-
-                    st.session_state.df_manual_fijo = pd.concat(
-                        [
-                            st.session_state.df_manual_fijo,
-                            renglon_copia
-                        ],
-                        ignore_index=True
-                    )
-
-                    st.success(
-                        "Se creó una copia del renglón seleccionado."
-                    )
-
-            with col_accion3:
-                st.write("")
-
-                if st.button(
-                    "Eliminar renglón",
-                    use_container_width=True,
-                    key="btn_eliminar_renglon_manual"
-                ):
-                    st.session_state.df_manual_fijo = (
-                        st.session_state.df_manual_fijo
-                        .drop(index=renglon_accion)
-                        .reset_index(drop=True)
-                    )
-
-                    st.success(
-                        "Se eliminó el renglón seleccionado."
-                    )
-
-        # ========================================================
-        # EDITOR DE LA TABLA MANUAL
-        # ========================================================
-        st.session_state.df_manual_fijo = st.data_editor(
-            st.session_state.df_manual_fijo,
-            num_rows="dynamic",
-            use_container_width=True,
-            key="editor_manual_seguro"
+        col_desc.write(""); col_desc.write("") # Espaciado para alinear el botón
+        col_desc.download_button(
+            label="📥 Descargar CSV Manual", data=df_out_manual.to_csv(**CSV_KWARGS_R).encode("utf-8"),
+            file_name=nombre_csv_manual if nombre_csv_manual.endswith(".csv") else f"{nombre_csv_manual}.csv",
+            mime="text/csv", type="primary", use_container_width=True, key="dl_csv_manual_btn"
         )
-
-        # ========================================================
-        # DESCARGA DEL CSV MANUAL
-        # ========================================================
-        col_nombre, col_descarga = st.columns([3, 1])
-
-        with col_nombre:
-            nombre_csv_manual = st.text_input(
-                "Nombre del archivo:",
-                value="carga_manual.csv",
-                key="nom_manual_seguro"
-            )
-
-        with col_descarga:
-            st.write("")
-            st.write("")
-
-            df_out_manual = st.session_state.df_manual_fijo.copy()
-
-            for col in df_out_manual.columns:
-                df_out_manual[col] = (
-                    df_out_manual[col]
-                    .astype(str)
-                    .str.replace('"', "", regex=False)
-                    .str.strip()
-                    .replace(
-                        ["nan", "None", "<NA>", "NaN"],
-                        ""
-                    )
-                )
-
-            if "SUBJ" in df_out_manual.columns:
-                df_out_manual["SUBJ"] = (
-                    df_out_manual["SUBJ"].apply(sin_espacios)
-                )
-
-            if "COURSE" in df_out_manual.columns:
-                df_out_manual["COURSE"] = (
-                    df_out_manual["COURSE"].apply(sin_espacios)
-                )
-
-            if "TIPODEHORARIO" in df_out_manual.columns:
-                df_out_manual["TIPODEHORARIO"] = (
-                    df_out_manual[
-                        "TIPODEHORARIO"
-                    ].apply(sin_espacios)
-                )
-
-            if "METODO_EDUCATIVO" in df_out_manual.columns:
-                df_out_manual["METODO_EDUCATIVO"] = (
-                    df_out_manual[
-                        "METODO_EDUCATIVO"
-                    ].apply(sin_espacios)
-                )
-
-            if "GRUPOS" in df_out_manual.columns:
-                df_out_manual["GRUPOS"] = (
-                    df_out_manual["GRUPOS"].replace("", "1")
-                )
-
-            if "SOCIODEINTEGRACION" in df_out_manual.columns:
-                df_out_manual["SOCIODEINTEGRACION"] = (
-                    df_out_manual[
-                        "SOCIODEINTEGRACION"
-                    ].replace("", "D2L")
-                )
-
-            for columna_numerica in [
-                "CAPACIDAD",
-                "SECCION"
-            ]:
-                if columna_numerica in df_out_manual.columns:
-                    df_out_manual[columna_numerica] = pd.to_numeric(
-                        df_out_manual[columna_numerica],
-                        errors="coerce"
-                    ).astype("Int64")
-
-            csv_manual_string = df_out_manual.to_csv(
-                **CSV_KWARGS_R
-            )
-
-            st.download_button(
-                label="📥 Descargar CSV Manual",
-                data=csv_manual_string.encode("utf-8"),
-                file_name=(
-                    nombre_csv_manual
-                    if nombre_csv_manual.endswith(".csv")
-                    else f"{nombre_csv_manual}.csv"
-                ),
-                mime="text/csv",
-                type="primary",
-                use_container_width=True,
-                key="dl_csv_manual_btn"
-            )
+        
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
