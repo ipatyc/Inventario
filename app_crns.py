@@ -1085,7 +1085,6 @@ with tab3:
             st.markdown("### 📋 Resultados del Cruce (NRC inyectados)")
 
             # Cambiamos solamente el nombre que VE el usuario.
-            # El dataframe original guardado en session_state no se altera.
             df_resultado_mostrar = st.session_state.df_cruce_rapido.rename(
                 columns={"datocomplementario": "Cluster"}
             ).copy()
@@ -1102,7 +1101,6 @@ with tab3:
             )
 
             if columnas_seleccionadas:
-                # Dejamos únicamente las columnas que la persona seleccionó.
                 df_para_copiar = df_resultado_mostrar[columnas_seleccionadas].copy()
 
                 st.dataframe(
@@ -1122,25 +1120,68 @@ with tab3:
                         "Haz clic en el botón de **Copiar** de la esquina "
                         "superior derecha del cuadro y después pégalo en Excel."
                     )
-
-                    # Tabulaciones para que Excel separe cada columna correctamente.
                     tsv_rapido = df_para_copiar.to_csv(index=False, sep="\t")
                     st.code(tsv_rapido, language="text")
 
                 # ----------------------------------------------------
-                # DESCARGAR SOLO LAS COLUMNAS SELECCIONADAS
+                # DESCARGAR EXCEL CON FORMATO Y COLORES
                 # ----------------------------------------------------
                 with col_b2:
                     st.markdown("#### 📥 Descargar en Excel")
                     st.info(
-                        "El archivo descargado llevará solamente las columnas seleccionadas."
+                        "El archivo descargado tendrá las columnas seleccionadas y formato visual listo."
                     )
 
+                    # --- Aplicando openpyxl para darle formato a la descarga rápida ---
                     excel_rapido_buffer = io.BytesIO()
-                    df_para_copiar.to_excel(excel_rapido_buffer, index=False)
+                    
+                    with pd.ExcelWriter(excel_rapido_buffer, engine='openpyxl') as writer:
+                        df_para_copiar.to_excel(writer, index=False, sheet_name="Cruce_NRC")
+                        worksheet = writer.sheets["Cruce_NRC"]
+                        
+                        # Estilos de openpyxl
+                        font_base = Font(name="Calibri", size=11)
+                        font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+                        fill_header = PatternFill(start_color="1F4E78", fill_type="solid")
+                        align_header = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                        align_center = Alignment(horizontal="center", vertical="center")
+                        
+                        font_nrc = Font(name="Calibri", size=11, bold=True)
+                        fill_nrc = PatternFill(start_color="DDEBF7", fill_type="solid")
+
+                        # Colorear la Cabecera
+                        for cell in worksheet[1]:
+                            cell.font = font_header
+                            cell.fill = fill_header
+                            cell.alignment = align_header
+                            
+                        # Ajustar el ancho de las columnas
+                        for col in worksheet.columns:
+                            max_len = 0
+                            for cell in col:
+                                if cell.value:
+                                    max_len = max(max_len, len(str(cell.value)))
+                            worksheet.column_dimensions[col[0].column_letter].width = max(max_len + 3, 11)
+
+                        # Detectar si se incluyó la columna NRC para resaltarla
+                        nrc_col_idx = None
+                        if "NRC" in df_para_copiar.columns:
+                            nrc_col_idx = list(df_para_copiar.columns).index("NRC") + 1
+
+                        # Aplicar fuente base, centrado y color al NRC
+                        for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
+                            for cell in row:
+                                if nrc_col_idx and cell.column == nrc_col_idx:
+                                    cell.font = font_nrc
+                                    cell.fill = fill_nrc
+                                else:
+                                    cell.font = font_base
+                                cell.alignment = align_center
+
+                    excel_rapido_buffer.seek(0) # Rebobinamos el buffer para que Streamlit lo pueda leer
 
                     st.download_button(
-                        label="📥 Descargar tabla seleccionada (.xlsx)",
+                        label="📥 Descargar tabla formateada (.xlsx)",
                         data=excel_rapido_buffer.getvalue(),
                         file_name="Cruce_Rapido_NRC.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
