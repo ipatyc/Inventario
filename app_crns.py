@@ -197,7 +197,7 @@ with tab1:
     columnas_esperadas = ["Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia", "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"]
     mapa_huellas = {normalizar_para_busqueda(col): col for col in columnas_esperadas}
 
-    # --- NUEVO: Valores permitidos para Dato Complementario / Clúster ---
+    # Valores permitidos para Dato Complementario / Clúster.
     CLUSTERS_PERMITIDOS = [
         "Ingenieria", "Bachillerato", "Negocios", "Ciencias Exactas",
         "Posgrado Online", "Humanidades", "Idiomas y ADN", "TJYG",
@@ -456,8 +456,7 @@ with tab1:
                 res["SOCIODEINTEGRACION"] = "D2L"
                 res["MODODECALIFICAR"] = df_origen["Modo de Calificar"].apply(format_r_string)
                 res["SESION"] = df_origen["Sesion"].apply(format_r_string)
-                
-                # REGLAS CLÚSTER APLICADAS AQUÍ
+
                 def aplicar_reglas_cluster(fila):
                     nivel_actual = str(fila.get("Nivel", "")).strip().upper()
                     cluster_excel = obtener_cluster_permitido(fila.get("Clúster"))
@@ -682,51 +681,97 @@ with tab1:
         cols_vis = [c for c in ["Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia", "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"] if c in st.session_state.raw_altas.columns]
         st.dataframe(st.session_state.raw_altas.loc[st.session_state.raw_altas["ArchivoOrigen"] == archivo_destino_manual, cols_vis], hide_index=True, use_container_width=True)
 
+    # ============================================================
+    # TABLA MANUAL: SELECCIONAR, COPIAR, ELIMINAR O AGREGAR RENGLONES
+    # ============================================================
     if not tiene_archivos_altas:
         st.markdown("#### Tabla manual")
-        if not st.session_state.df_manual_fijo.empty:
-            indices_reng = list(st.session_state.df_manual_fijo.index)
-            if st.session_state.get("manual_renglon_accion") not in indices_reng: st.session_state.manual_renglon_accion = indices_reng[0]
 
-            col_act1, col_act2, col_act3 = st.columns([3, 1, 1])
-            renglon_accion = col_act1.selectbox("Selecciona el renglón", options=indices_reng, format_func=lambda i: f"Renglón {i + 1}: {st.session_state.df_manual_fijo.loc[i, 'SUBJ']} {st.session_state.df_manual_fijo.loc[i, 'COURSE']}", key="manual_renglon_accion")
-            
-            if col_act2.button("Copiar renglón", use_container_width=True, key="btn_copiar_renglon_manual"):
-                st.session_state.df_manual_fijo = pd.concat([st.session_state.df_manual_fijo, st.session_state.df_manual_fijo.loc[[renglon_accion]].copy()], ignore_index=True)
-                st.success("Se creó una copia del renglón seleccionado.")
-                st.rerun() # Fuerza la actualización del editor visual
-            if col_act3.button("Eliminar renglón", use_container_width=True, key="btn_eliminar_renglon_manual"):
-                st.session_state.df_manual_fijo = st.session_state.df_manual_fijo.drop(index=renglon_accion).reset_index(drop=True)
-                st.success("Se eliminó el renglón seleccionado.")
-                st.rerun() # Fuerza la actualización del editor visual
+        # La columna Seleccionar solo sirve para acciones; no se exporta al CSV.
+        df_editor_manual = st.session_state.df_manual_fijo.copy()
+        if "Seleccionar" not in df_editor_manual.columns:
+            df_editor_manual.insert(0, "Seleccionar", False)
 
-        # SOLUCIÓN DEL BUG: Usar una variable local para capturar los cambios y no provocar
-        # que Streamlit pierda el enfoque (se actualice y borre) mientras estás escribiendo.
-        df_editado = st.data_editor(st.session_state.df_manual_fijo, num_rows="dynamic", use_container_width=True, key="editor_manual_seguro")
-        
-        # Solo actualizamos la sesión maestra si de verdad hubo un cambio, evitando el loop infinito
-        if not st.session_state.df_manual_fijo.equals(df_editado):
-            st.session_state.df_manual_fijo = df_editado
+        df_editado = st.data_editor(
+            df_editor_manual,
+            num_rows="fixed", # Evita que se creen renglones por accidente al escribir abajo
+            use_container_width=True,
+            hide_index=True,
+            key="editor_manual_seguro",
+            column_config={
+                "Seleccionar": st.column_config.CheckboxColumn(
+                    "Seleccionar",
+                    default=False
+                )
+            }
+        )
+
+        seleccionados = df_editado.index[df_editado["Seleccionar"]].tolist()
+
+        # Guardamos los cambios de la tabla sin la columna de selección
+        # BUG FIX: Comparamos antes de guardar para no perder el foco mientras escribes
+        df_sin_seleccion = df_editado.drop(columns="Seleccionar")
+        if not st.session_state.df_manual_fijo.equals(df_sin_seleccion):
+            st.session_state.df_manual_fijo = df_sin_seleccion
+
+        col_accion1, col_accion2, col_accion3 = st.columns(3)
+
+        with col_accion1:
+            if st.button("Nuevo renglón", use_container_width=True, key="btn_nuevo_renglon_manual"):
+                # Toma automáticamente las columnas que sí existen en la tabla
+                nuevo_renglon_vacio = {col: "" for col in st.session_state.df_manual_fijo.columns}
+                nuevo_renglon_vacio["GRUPOS"] = "1"
+                nuevo_renglon_vacio["SOCIODEINTEGRACION"] = "D2L"
+
+                st.session_state.df_manual_fijo = pd.concat(
+                    [st.session_state.df_manual_fijo, pd.DataFrame([nuevo_renglon_vacio])],
+                    ignore_index=True
+                )
+                st.rerun()
+
+        with col_accion2:
+            if st.button("Copiar seleccionados", use_container_width=True, key="btn_copiar_renglones_manual"):
+                if not seleccionados:
+                    st.warning("Marca al menos un renglón en la columna 'Seleccionar'.")
+                else:
+                    renglones_copia = st.session_state.df_manual_fijo.loc[seleccionados].copy()
+                    st.session_state.df_manual_fijo = pd.concat(
+                        [st.session_state.df_manual_fijo, renglones_copia],
+                        ignore_index=True
+                    )
+                    st.rerun()
+
+        with col_accion3:
+            if st.button("Eliminar seleccionados", use_container_width=True, key="btn_eliminar_renglones_manual"):
+                if not seleccionados:
+                    st.warning("Marca al menos un renglón en la columna 'Seleccionar'.")
+                else:
+                    st.session_state.df_manual_fijo = (
+                        st.session_state.df_manual_fijo
+                        .drop(index=seleccionados)
+                        .reset_index(drop=True)
+                    )
+                    st.rerun()
 
         # --- 10. DESCARGA DEL ARCHIVO MANUAL ---
         col_nom, col_desc = st.columns([3, 1])
         nombre_csv_manual = col_nom.text_input("Nombre del archivo:", value="carga_manual.csv", key="nom_manual_seguro")
         
-        # IMPORTANTE: Al descargar, usamos la info editada al instante, así no pierdes el último teclazo.
-        df_out_manual = df_editado.copy()
+        # Al descargar usamos df_sin_seleccion para que no se incluya el checkbox
+        df_out_manual = df_sin_seleccion.copy()
         
-        # 1. Aplicar format_r_string a las columnas de texto generales
+        # 1. Aplicar format_r_string a las columnas de texto generales (Igual que en el CSV masivo)
         columnas_r_string = ["PERIODO", "SEDE", "PARTEPERIODO", "STATUS", "MODODECALIFICAR", "SESION", "datocomplementario"]
         for col in columnas_r_string:
             if col in df_out_manual.columns:
                 df_out_manual[col] = df_out_manual[col].apply(format_r_string)
         
-        # 2. Aplicar sin_espacios a las claves
+        # 2. Aplicar sin_espacios a las claves (Igual que en el CSV masivo)
         for col in ["SUBJ", "COURSE", "TIPODEHORARIO", "METODO_EDUCATIVO"]: 
             if col in df_out_manual.columns: 
                 df_out_manual[col] = df_out_manual[col].apply(sin_espacios)
                 
-        # 3. Forzar valores fijos y numéricos
+        # 3. Forzar valores fijos y numéricos (Igual que en el CSV masivo)
         if "GRUPOS" in df_out_manual.columns: 
             df_out_manual["GRUPOS"] = pd.Series(1, index=df_out_manual.index, dtype="Int64")
         if "SOCIODEINTEGRACION" in df_out_manual.columns: 
@@ -736,7 +781,7 @@ with tab1:
             if col_num in df_out_manual.columns: 
                 df_out_manual[col_num] = pd.to_numeric(df_out_manual[col_num], errors="coerce").astype("Int64")
 
-        # 4. Limpieza final de texto: quitar comillas dobles y nulos
+        # 4. Limpieza final de texto: quitar comillas dobles y nulos de pandas
         for col in df_out_manual.columns: 
             if df_out_manual[col].dtype == object or pd.api.types.is_string_dtype(df_out_manual[col]):
                 df_out_manual[col] = df_out_manual[col].astype(str).str.replace('"', "", regex=False).str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
