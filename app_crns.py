@@ -1060,7 +1060,12 @@ with tab3:
                         
                     if dfs_combinados:
                         df_resultado_rapido = pd.concat(dfs_combinados, ignore_index=True)
+                        
+                        # Guardamos el resultado completo
                         st.session_state.df_cruce_rapido = df_resultado_rapido
+                        # Al generar un cruce nuevo, reseteamos la selección de columnas
+                        st.session_state.pop("columnas_copia_rapida", None)
+                        
                         st.success("✅ ¡Tabla cruzada generada exitosamente!")
                         
                         if alertas_nrc_rapido:
@@ -1073,29 +1078,78 @@ with tab3:
                 except Exception as e:
                     st.error(f"❌ Ocurrió un error en el cruce rápido: {str(e)}")
 
+        # ============================================================
+        # RESULTADOS PARA COPIAR O DESCARGAR
+        # ============================================================
         if st.session_state.df_cruce_rapido is not None:
             st.markdown("### 📋 Resultados del Cruce (NRC inyectados)")
-            st.dataframe(st.session_state.df_cruce_rapido, use_container_width=True)
-            
-            col_b1, col_b2 = st.columns(2)
-            with col_b1:
-                st.markdown("#### 📝 ¿Quieres copiar la tabla directamente?")
-                st.info("Haz clic en el botón de **'Copiar'** en la esquina superior derecha del cuadro de abajo y pégalo (Ctrl+V) en tu Excel.")
-                tsv_rapido = st.session_state.df_cruce_rapido.to_csv(index=False, sep='\t')
-                st.code(tsv_rapido, language="text")
-            
-            with col_b2:
-                st.markdown("#### 📥 O descárgala en formato Excel")
-                st.info("Simplemente haz clic en el siguiente botón:")
-                excel_rapido_buffer = io.BytesIO()
-                st.session_state.df_cruce_rapido.to_excel(excel_rapido_buffer, index=False)
-                
-                st.download_button(
-                    label="📥 Descargar esta tabla (.xlsx)",
-                    data=excel_rapido_buffer.getvalue(),
-                    file_name="Cruce_Rapido_NRC.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
+
+            # Cambiamos solamente el nombre que VE el usuario.
+            # El dataframe original guardado en session_state no se altera.
+            df_resultado_mostrar = st.session_state.df_cruce_rapido.rename(
+                columns={"datocomplementario": "Cluster"}
+            ).copy()
+
+            # --------------------------------------------------------
+            # SELECCIÓN DE COLUMNAS PARA COPIAR O DESCARGAR
+            # --------------------------------------------------------
+            columnas_seleccionadas = st.multiselect(
+                "✅ Selecciona las columnas que quieres copiar o descargar:",
+                options=list(df_resultado_mostrar.columns),
+                default=list(df_resultado_mostrar.columns),
+                key="columnas_copia_rapida",
+                help="Puedes dejar todas o quitar las que no necesites."
+            )
+
+            if columnas_seleccionadas:
+                # Dejamos únicamente las columnas que la persona seleccionó.
+                df_para_copiar = df_resultado_mostrar[columnas_seleccionadas].copy()
+
+                st.dataframe(
+                    df_para_copiar,
                     use_container_width=True,
-                    key="dl_cruce_rapido_xlsx"
+                    hide_index=True
+                )
+
+                col_b1, col_b2 = st.columns(2)
+
+                # ----------------------------------------------------
+                # COPIAR Y PEGAR DIRECTO EN EXCEL
+                # ----------------------------------------------------
+                with col_b1:
+                    st.markdown("#### 📝 Copiar y pegar en Excel")
+                    st.info(
+                        "Haz clic en el botón de **Copiar** de la esquina "
+                        "superior derecha del cuadro y después pégalo en Excel."
+                    )
+
+                    # Tabulaciones para que Excel separe cada columna correctamente.
+                    tsv_rapido = df_para_copiar.to_csv(index=False, sep="\t")
+                    st.code(tsv_rapido, language="text")
+
+                # ----------------------------------------------------
+                # DESCARGAR SOLO LAS COLUMNAS SELECCIONADAS
+                # ----------------------------------------------------
+                with col_b2:
+                    st.markdown("#### 📥 Descargar en Excel")
+                    st.info(
+                        "El archivo descargado llevará solamente las columnas seleccionadas."
+                    )
+
+                    excel_rapido_buffer = io.BytesIO()
+                    df_para_copiar.to_excel(excel_rapido_buffer, index=False)
+
+                    st.download_button(
+                        label="📥 Descargar tabla seleccionada (.xlsx)",
+                        data=excel_rapido_buffer.getvalue(),
+                        file_name="Cruce_Rapido_NRC.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary",
+                        use_container_width=True,
+                        key="dl_cruce_rapido_xlsx"
+                    )
+
+            else:
+                st.warning(
+                    "⚠️ Selecciona por lo menos una columna para poder copiar o descargar."
                 )
