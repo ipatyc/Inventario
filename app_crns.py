@@ -217,8 +217,9 @@ with tab1:
                     horario, metodo = sin_espacios(row.get("SCRSCHD_SCHD_CODE")), sin_espacios(row.get("SCRSCHD_INSM_CODE"))
                     llave = (subj, crse)
 
+                    # AHORA GUARDAMOS LAS PAREJAS EXACTAS DE HORARIO-MÉTODO
                     if llave not in cat_avanzado:
-                        cat_avanzado[llave] = {"titles": set(), "schd": set(), "insm": set()}
+                        cat_avanzado[llave] = {"titles": set(), "schd": set(), "insm": set(), "pares": set()}
 
                     if titulo_corto and titulo_corto != "NAN":
                         cat_avanzado[llave]["titles"].add(titulo_corto)
@@ -226,8 +227,13 @@ with tab1:
                     if titulo_largo and titulo_largo != "NAN":
                         cat_avanzado[llave]["titles"].add(titulo_largo)
                         indice_nombres_avanzado[normalizar_para_cruce(titulo_largo)] = llave
-                    if horario and horario != "NAN": cat_avanzado[llave]["schd"].add(horario)
-                    if metodo and metodo != "NAN": cat_avanzado[llave]["insm"].add(metodo)
+                    
+                    h_val = horario if horario and horario != "NAN" else ""
+                    m_val = metodo if metodo and metodo != "NAN" else ""
+                    
+                    if h_val: cat_avanzado[llave]["schd"].add(h_val)
+                    if m_val: cat_avanzado[llave]["insm"].add(m_val)
+                    if h_val or m_val: cat_avanzado[llave]["pares"].add((h_val, m_val))
 
                 st.session_state.cat_avanzado_cache, st.session_state.indice_nombres_avanzado = cat_avanzado, indice_nombres_avanzado
                 st.session_state.cat_avanzado_firma = firma_catalogo
@@ -469,7 +475,7 @@ with tab1:
     tiene_archivos_altas = bool(files_altas)
     
     st.subheader("Visualizador de ALTAS y agregar registro" if tiene_archivos_altas else "Creación de CSV Manual")
-    st.caption("Agrega materias sueltas. Si buscas, el sistema autocompletará las opciones de horario y método.")
+    st.caption("Agrega materias sueltas. Si buscas, el sistema autocompletará y filtrará las opciones de horario y método.")
 
     if "df_manual_fijo" not in st.session_state: st.session_state.df_manual_fijo = pd.DataFrame(columns=["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS", "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO", "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION", "datocomplementario"])
     if "manual_candidatos" not in st.session_state: st.session_state.manual_candidatos = []
@@ -538,10 +544,34 @@ with tab1:
         
         cat_avanzado, _ = cargar_catalogo_avanzado()
         info_materia = cat_avanzado[llave_materia]
-        horarios_disp, metodos_disp = [""] + sorted(info_materia["schd"]), [""] + sorted(info_materia["insm"])
         
-        if st.session_state.get("manual_horario") not in horarios_disp: st.session_state.manual_horario = ""
-        if st.session_state.get("manual_metodo") not in metodos_disp: st.session_state.manual_metodo = ""
+        # === LÓGICA DE FILTRADO DEPENDIENTE (HORARIOS <-> MÉTODOS) ===
+        horarios_base = sorted(info_materia["schd"])
+        metodos_base = sorted(info_materia["insm"])
+        pares_validos = info_materia.get("pares", set())
+
+        sel_horario = st.session_state.get("manual_horario", "")
+        sel_metodo = st.session_state.get("manual_metodo", "")
+
+        # Filtramos horarios si ya hay un método seleccionado
+        if sel_metodo and sel_metodo in metodos_base:
+            horarios_validos = sorted({h for h, m in pares_validos if m == sel_metodo and h})
+        else:
+            horarios_validos = horarios_base
+
+        # Filtramos métodos si ya hay un horario seleccionado
+        if sel_horario and sel_horario in horarios_base:
+            metodos_validos = sorted({m for h, m in pares_validos if h == sel_horario and m})
+        else:
+            metodos_validos = metodos_base
+
+        horarios_disp = [""] + horarios_validos
+        metodos_disp = [""] + metodos_validos
+
+        # Evitar errores de Streamlit si la opción guardada ya no es válida tras el filtro
+        if sel_horario not in horarios_disp: st.session_state.manual_horario = ""
+        if sel_metodo not in metodos_disp: st.session_state.manual_metodo = ""
+        # ==============================================================
 
         st.markdown("#### Datos para agregar la materia")
         col_d1, col_d2 = st.columns(2)
@@ -637,8 +667,7 @@ with tab1:
             label="📥 Descargar CSV Manual", data=df_out_manual.to_csv(**CSV_KWARGS_R).encode("utf-8"),
             file_name=nombre_csv_manual if nombre_csv_manual.endswith(".csv") else f"{nombre_csv_manual}.csv",
             mime="text/csv", type="primary", use_container_width=True, key="dl_csv_manual_btn"
-        )
-        
+        )        
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
