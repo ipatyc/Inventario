@@ -197,6 +197,36 @@ with tab1:
     columnas_esperadas = ["Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia", "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"]
     mapa_huellas = {normalizar_para_busqueda(col): col for col in columnas_esperadas}
 
+    # --- NUEVO: Valores permitidos para Dato Complementario / Clúster ---
+    CLUSTERS_PERMITIDOS = [
+        "Ingenieria", "Bachillerato", "Negocios", "Ciencias Exactas",
+        "Posgrado Online", "Humanidades", "Idiomas y ADN", "TJYG",
+        "Smart Cities", "Ejecutivo", "Ejecutivas", "EGEL",
+        "Intercambio", "Consejeria", "Posgrado"
+    ]
+    MAPA_CLUSTERS = {
+        normalizar_para_busqueda(cluster): cluster
+        for cluster in CLUSTERS_PERMITIDOS
+    }
+
+    UMBRAL_SIMILITUD_CLUSTER = 0.90
+
+    def obtener_cluster_permitido(valor):
+        # Corrige solo clusters muy parecidos; los demás se conservan como llegaron.
+        cluster_original = format_r_string(valor)
+        cluster_normalizado = normalizar_para_busqueda(cluster_original)
+
+        if cluster_normalizado in MAPA_CLUSTERS:
+            return MAPA_CLUSTERS[cluster_normalizado]
+
+        mejor_cluster, mejor_similitud = cluster_original, 0.0
+        for huella_cluster, cluster_oficial in MAPA_CLUSTERS.items():
+            coincidencia = similitud(cluster_normalizado, huella_cluster)
+            if coincidencia > mejor_similitud:
+                mejor_cluster, mejor_similitud = cluster_oficial, coincidencia
+
+        return mejor_cluster if mejor_similitud >= UMBRAL_SIMILITUD_CLUSTER else cluster_original
+
     # --- 3. FUNCIÓN PARA CARGAR CATÁLOGO AVANZADO EN MEMORIA ---
     def cargar_catalogo_avanzado():
         firma_catalogo = f"{file_cat_ext.name}:{getattr(file_cat_ext, 'size', '')}" if file_cat_ext else None
@@ -426,10 +456,21 @@ with tab1:
                 res["SOCIODEINTEGRACION"] = "D2L"
                 res["MODODECALIFICAR"] = df_origen["Modo de Calificar"].apply(format_r_string)
                 res["SESION"] = df_origen["Sesion"].apply(format_r_string)
-                res["datocomplementario"] = df_origen.apply(lambda f: "BACHILLERATO" if "BACHILLERATO" in str(f.get("Nivel", "")).upper() else format_r_string(f.get("Clúster")), axis=1)
+                
+                # REGLAS CLÚSTER APLICADAS AQUÍ
+                def aplicar_reglas_cluster(fila):
+                    nivel_actual = str(fila.get("Nivel", "")).strip().upper()
+                    cluster_excel = obtener_cluster_permitido(fila.get("Clúster"))
+
+                    if "BACHILLERATO" in nivel_actual:
+                        return "Bachillerato"
+
+                    return cluster_excel
+
+                res["datocomplementario"] = df_origen.apply(aplicar_reglas_cluster, axis=1)
                 
                 # Limpiar texto
-                for col in res.columns: res[col] = res[col].astype(str).str.replace('"', "").str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
+                for col in res.columns: res[col] = res[col].astype(str).str.replace('"', "", regex=False).str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
                 return res[["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS", "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO", "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION", "datocomplementario"]].to_csv(**CSV_KWARGS_R)
 
             st.session_state.csv_files_to_download, st.session_state.zip_file_bytes, st.session_state.csv_consolidado_bytes = {}, None, None
@@ -588,20 +629,31 @@ with tab1:
             modo_calificar_manual = st.text_input("Modo de calificar", key="manual_modo_calificar").strip()
             sesion_manual = st.text_input("Sesión", key="manual_sesion").strip()
 
-        col_e1, col_e2, col_e3, col_e4 = st.columns(4)
+        col_e1, col_e2, col_e3, col_extra4 = st.columns(4)
         with col_e1: grupos_manual = st.number_input("Grupos", min_value=1, value=1, step=1, key="manual_grupos")
         with col_e2: nivel_manual = st.selectbox("Nivel", options=["LICENCIATURA", "BACHILLERATO", "POSGRADO"], key="manual_nivel")
         with col_e3: integracion_manual = st.text_input("Socio de integración", value="D2L", key="manual_integracion").strip()
-        with col_e4: cluster_manual = st.text_input("Clúster", key="manual_cluster").strip()
+        with col_extra4: 
+            cluster_manual = st.selectbox(
+                "Dato Complementario (Clúster)",
+                options=CLUSTERS_PERMITIDOS,
+                index=None,
+                placeholder="Selecciona un Clúster",
+                key="manual_cluster"
+            )
 
         if st.button("Agregar materia seleccionada", type="primary", use_container_width=True, key="btn_agregar_manual"):
+            if not cluster_manual:
+                st.warning("Selecciona un Dato Complementario / Clúster antes de agregar la materia.")
+                st.stop()
+                
             nuevo_renglon_manual = pd.DataFrame([{
                 "PERIODO": periodo_manual, "SEDE": sede_manual, "SUBJ": llave_materia[0], "COURSE": llave_materia[1],
                 "PARTEPERIODO": parte_periodo_manual, "STATUS": estatus_manual, "CAPACIDAD": capacidad_manual,
                 "GRUPOS": str(grupos_manual), "SECCION": seccion_manual, "TIPODEHORARIO": horario_manual,
                 "METODO_EDUCATIVO": metodo_manual, "SOCIODEINTEGRACION": integracion_manual or "D2L",
                 "MODODECALIFICAR": modo_calificar_manual, "SESION": sesion_manual,
-                "datocomplementario": "BACHILLERATO" if nivel_manual == "BACHILLERATO" else cluster_manual
+                "datocomplementario": "Bachillerato" if nivel_manual == "BACHILLERATO" else cluster_manual
             }])
 
             if tiene_archivos_altas:
@@ -642,30 +694,39 @@ with tab1:
             if col_act2.button("Copiar renglón", use_container_width=True, key="btn_copiar_renglon_manual"):
                 st.session_state.df_manual_fijo = pd.concat([st.session_state.df_manual_fijo, st.session_state.df_manual_fijo.loc[[renglon_accion]].copy()], ignore_index=True)
                 st.success("Se creó una copia del renglón seleccionado.")
+                st.rerun() # Fuerza la actualización del editor visual
             if col_act3.button("Eliminar renglón", use_container_width=True, key="btn_eliminar_renglon_manual"):
                 st.session_state.df_manual_fijo = st.session_state.df_manual_fijo.drop(index=renglon_accion).reset_index(drop=True)
                 st.success("Se eliminó el renglón seleccionado.")
+                st.rerun() # Fuerza la actualización del editor visual
 
-        st.session_state.df_manual_fijo = st.data_editor(st.session_state.df_manual_fijo, num_rows="dynamic", use_container_width=True, key="editor_manual_seguro")
+        # SOLUCIÓN DEL BUG: Usar una variable local para capturar los cambios y no provocar
+        # que Streamlit pierda el enfoque (se actualice y borre) mientras estás escribiendo.
+        df_editado = st.data_editor(st.session_state.df_manual_fijo, num_rows="dynamic", use_container_width=True, key="editor_manual_seguro")
+        
+        # Solo actualizamos la sesión maestra si de verdad hubo un cambio, evitando el loop infinito
+        if not st.session_state.df_manual_fijo.equals(df_editado):
+            st.session_state.df_manual_fijo = df_editado
 
         # --- 10. DESCARGA DEL ARCHIVO MANUAL ---
         col_nom, col_desc = st.columns([3, 1])
         nombre_csv_manual = col_nom.text_input("Nombre del archivo:", value="carga_manual.csv", key="nom_manual_seguro")
         
-        df_out_manual = st.session_state.df_manual_fijo.copy()
+        # IMPORTANTE: Al descargar, usamos la info editada al instante, así no pierdes el último teclazo.
+        df_out_manual = df_editado.copy()
         
-        # 1. Aplicar format_r_string a las columnas de texto generales (Igual que en el CSV masivo)
+        # 1. Aplicar format_r_string a las columnas de texto generales
         columnas_r_string = ["PERIODO", "SEDE", "PARTEPERIODO", "STATUS", "MODODECALIFICAR", "SESION", "datocomplementario"]
         for col in columnas_r_string:
             if col in df_out_manual.columns:
                 df_out_manual[col] = df_out_manual[col].apply(format_r_string)
         
-        # 2. Aplicar sin_espacios a las claves (Igual que en el CSV masivo)
+        # 2. Aplicar sin_espacios a las claves
         for col in ["SUBJ", "COURSE", "TIPODEHORARIO", "METODO_EDUCATIVO"]: 
             if col in df_out_manual.columns: 
                 df_out_manual[col] = df_out_manual[col].apply(sin_espacios)
                 
-        # 3. Forzar valores fijos y numéricos (Igual que en el CSV masivo)
+        # 3. Forzar valores fijos y numéricos
         if "GRUPOS" in df_out_manual.columns: 
             df_out_manual["GRUPOS"] = pd.Series(1, index=df_out_manual.index, dtype="Int64")
         if "SOCIODEINTEGRACION" in df_out_manual.columns: 
@@ -675,7 +736,7 @@ with tab1:
             if col_num in df_out_manual.columns: 
                 df_out_manual[col_num] = pd.to_numeric(df_out_manual[col_num], errors="coerce").astype("Int64")
 
-        # 4. Limpieza final de texto: quitar comillas dobles y nulos de pandas
+        # 4. Limpieza final de texto: quitar comillas dobles y nulos
         for col in df_out_manual.columns: 
             if df_out_manual[col].dtype == object or pd.api.types.is_string_dtype(df_out_manual[col]):
                 df_out_manual[col] = df_out_manual[col].astype(str).str.replace('"', "", regex=False).str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
