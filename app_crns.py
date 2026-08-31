@@ -177,7 +177,7 @@ with tab1:
                 "input_nom_busq", "input_subj_busq", "input_crse_busq", "manual_horario", "manual_metodo", 
                 "manual_periodo", "manual_parte_periodo", "manual_capacidad", "manual_seccion", 
                 "manual_sede", "manual_estatus", "manual_modo_calificar", "manual_sesion", "manual_grupos", 
-                "manual_integracion", "manual_nivel", "manual_cluster"
+                "manual_integracion", "manual_nivel", "manual_cluster", "manual_materia_confirmada"
             ]
             for clave in claves_a_borrar:
                 if clave in st.session_state: del st.session_state[clave]
@@ -201,7 +201,7 @@ with tab1:
     CLUSTERS_PERMITIDOS = [
         "Ingenieria", "Bachillerato", "Negocios", "Ciencias Exactas",
         "Posgrado Online", "Humanidades", "Idiomas y ADN", "TJYG",
-        "Smart Cities", "Ejecutivo", "Ejecutivas", "EGEL",
+        "Smart Cities", "Ejecutivas", "EGEL",
         "Intercambio", "Consejeria", "Posgrado"
     ]
     MAPA_CLUSTERS = {
@@ -245,11 +245,12 @@ with tab1:
 
                     titulo_corto, titulo_largo = limpiar_espacios_y_mayusculas(row.get("SCBCRSE_TITLE")), limpiar_espacios_y_mayusculas(row.get("SCRSYLN_LONG_COURSE_TITLE"))
                     horario, metodo = sin_espacios(row.get("SCRSCHD_SCHD_CODE")), sin_espacios(row.get("SCRSCHD_INSM_CODE"))
+                    modo_calificar = sin_espacios(row.get("SCRGMOD_GMOD_CODE"))
                     llave = (subj, crse)
 
                     # AHORA GUARDAMOS LAS PAREJAS EXACTAS DE HORARIO-MÉTODO
                     if llave not in cat_avanzado:
-                        cat_avanzado[llave] = {"titles": set(), "schd": set(), "insm": set(), "pares": set()}
+                        cat_avanzado[llave] = {"titles": set(), "schd": set(), "insm": set(), "gmod": set(), "pares": set()}
 
                     if titulo_corto and titulo_corto != "NAN":
                         cat_avanzado[llave]["titles"].add(titulo_corto)
@@ -263,6 +264,7 @@ with tab1:
                     
                     if h_val: cat_avanzado[llave]["schd"].add(h_val)
                     if m_val: cat_avanzado[llave]["insm"].add(m_val)
+                    if modo_calificar and modo_calificar != "NAN": cat_avanzado[llave]["gmod"].add(modo_calificar)
                     if h_val or m_val: cat_avanzado[llave]["pares"].add((h_val, m_val))
 
                 st.session_state.cat_avanzado_cache, st.session_state.indice_nombres_avanzado = cat_avanzado, indice_nombres_avanzado
@@ -290,6 +292,40 @@ with tab1:
                         indice_cat.setdefault(nivel, []).append({"mat_orig": materia, "mat_norm": normalizar_para_cruce(fila.get("Materia")), "subj": subj, "crse": crse})
                         if subj and crse: indice_cat_claves[(normalizar_para_cruce(subj), crse)] = materia
 
+            # Busca la coincidencia más cercana usando nombre, SUBJ y COURSE.
+            def buscar_mejor_coincidencia(materia, subj, crse, nivel):
+                candidatos = []
+
+                for (subj_cat, crse_cat), info in cat_avanzado.items():
+                    titulos = sorted(info["titles"]) or [""]
+                    candidatos.append({
+                        "subj": subj_cat, "crse": crse_cat, "materia": titulos[0],
+                        "titulos": titulos, "fuente": "Cat. Avanzado"
+                    })
+
+                basicos_nivel = indice_cat.get(nivel, [])
+                basicos = basicos_nivel or [fila for filas in indice_cat.values() for fila in filas]
+                for candidato in basicos:
+                    candidatos.append({
+                        "subj": candidato["subj"], "crse": candidato["crse"],
+                        "materia": candidato["mat_orig"], "titulos": [candidato["mat_orig"]],
+                        "fuente": "Cat. Básico"
+                    })
+
+                mejor, mejor_puntaje = None, -1.0
+                for candidato in candidatos:
+                    puntaje_nombre = max(
+                        [similitud(materia, normalizar_para_cruce(titulo)) for titulo in candidato["titulos"]] or [0.0]
+                    )
+                    puntaje_subj = 1.0 if subj == candidato["subj"] else similitud(subj, candidato["subj"])
+                    puntaje_crse = 1.0 if crse == candidato["crse"] else similitud(crse, candidato["crse"])
+                    puntaje = (puntaje_nombre * 0.55) + (puntaje_subj * 0.25) + (puntaje_crse * 0.20)
+
+                    if puntaje > mejor_puntaje:
+                        mejor, mejor_puntaje = candidato, puntaje
+
+                return mejor, mejor_puntaje
+
             # Procesar archivos ALTAS
             piezas, resultados = [], []
             for archivo_altas in files_altas:
@@ -316,54 +352,47 @@ with tab1:
                 for idx, fila in df_total.iterrows():
                     nivel, materia_excel, subj_original, crse_original = normalizar_para_cruce(fila.get("Nivel")), limpiar_espacios_y_mayusculas(fila.get("Nombre de la Materia")), sin_espacios(fila.get("Subject")), sin_espacios(fila.get("Course"))
                     horario_original, metodo_original = sin_espacios(fila.get("Tipo de Horario")), sin_espacios(fila.get("Método Educativo"))
+                    modo_calificar_original = sin_espacios(fila.get("Modo de Calificar"))
                     materia_normalizada = normalizar_para_cruce(materia_excel)
                     
                     subj_sugerido, crse_sugerido, materia_catalogo, comentario_nombres = subj_original, crse_original, materia_excel, ""
 
-                    # Validación Nombres y Claves (Avanzado -> Básico)
-                    if cat_avanzado and (subj_original, crse_original) in cat_avanzado:
-                        titulos_permitidos = [normalizar_para_cruce(t) for t in cat_avanzado[(subj_original, crse_original)]["titles"]]
-                        if materia_normalizada in titulos_permitidos: comentario_nombres = "Nombre y Claves OK"
+                    # Validación Nombres y Claves: compara contra ambos catálogos.
+                    mejor_candidato, mejor_puntaje = buscar_mejor_coincidencia(
+                        materia_normalizada, subj_original, crse_original, nivel
+                    )
+
+                    if mejor_candidato and mejor_puntaje >= 0.63:
+                        subj_sugerido = mejor_candidato["subj"]
+                        crse_sugerido = mejor_candidato["crse"]
+                        materia_catalogo = mejor_candidato["materia"]
+                        mismo_subj_crse = subj_original == subj_sugerido and crse_original == crse_sugerido
+                        mismo_nombre = materia_normalizada in [
+                            normalizar_para_cruce(titulo) for titulo in mejor_candidato["titulos"]
+                        ]
+
+                        if mismo_subj_crse and mismo_nombre:
+                            comentario_nombres = f"Todo correcto ({mejor_candidato['fuente']})"
+                        elif mismo_subj_crse:
+                            comentario_nombres = f"Clave OK, pero Nombre difiere ({mejor_candidato['fuente']})"
                         else:
-                            titulos = sorted(cat_avanzado[(subj_original, crse_original)]["titles"])
-                            materia_catalogo = titulos[0] if titulos else materia_excel
-                            comentario_nombres = "Clave OK, pero Nombre difiere del Catálogo"
-                    elif materia_normalizada in indice_nombres_avanzado:
-                        subj_sugerido, crse_sugerido = indice_nombres_avanzado[materia_normalizada]
-                        comentario_nombres = "Claves incorrectas (Match por Nombre en Cat. Avanzado)"
+                            comentario_nombres = (
+                                f"Claves sugeridas ({mejor_candidato['fuente']}, "
+                                f"similitud {mejor_puntaje:.0%})"
+                            )
                     else:
-                        comentario_nombres = "Buscando en Básico..."
+                        comentario_nombres = "No se encontró una coincidencia suficiente en ningún catálogo"
 
-                    if "Buscando en Básico" in comentario_nombres:
-                        candidatos_cat = indice_cat.get(nivel, [])
-                        coincidencias_exactas = [c for c in candidatos_cat if c["mat_norm"] == materia_normalizada]
-                        
-                        if coincidencias_exactas:
-                            perfecta = next((c for c in coincidencias_exactas if c["subj"] == subj_original and c["crse"] == crse_original), None)
-                            coincidencia_elegida = perfecta if perfecta else coincidencias_exactas[0]
-                            subj_sugerido, crse_sugerido, materia_catalogo = coincidencia_elegida["subj"], coincidencia_elegida["crse"], coincidencia_elegida["mat_orig"]
-                            comentario_nombres = "Todo correcto (Cat. Básico)" if perfecta else "Claves sugeridas (Cat. Básico)"
-                        else:
-                            # Fuzzy matching simplificado
-                            mejor_candidato, mejor_puntaje = None, -1.0
-                            for c in candidatos_cat:
-                                p = similitud(materia_normalizada, c["mat_norm"])
-                                if p > mejor_puntaje: mejor_puntaje, mejor_candidato = p, c
-                            if mejor_candidato and mejor_puntaje >= UMBRAL_FUZZY:
-                                subj_sugerido, crse_sugerido, materia_catalogo = mejor_candidato["subj"], mejor_candidato["crse"], mejor_candidato["mat_orig"]
-                                comentario_nombres = "Claves sugeridas (Cat. Básico)"
-                            else:
-                                llave_clave = (normalizar_para_cruce(subj_original), crse_original)
-                                if llave_clave in indice_cat_claves:
-                                    materia_catalogo = indice_cat_claves[llave_clave]
-                                    comentario_nombres = "Nombre sugerido por Claves (Cat. Básico)"
-                                else: comentario_nombres = "No se encontró en ningún catálogo"
-
-                    # Validación Horarios y Métodos
-                    horario_sugerido, metodo_sugerido, comentario_horario, comentario_metodo = horario_original, metodo_original, "Sin catálogo para validar", "Sin catálogo para validar"
+                    # Validación Horarios, Métodos y Modo de Calificar
+                    horario_sugerido, metodo_sugerido = horario_original, metodo_original
+                    modo_calificar_sugerido = modo_calificar_original
+                    comentario_horario, comentario_metodo = "Sin catálogo para validar", "Sin catálogo para validar"
+                    comentario_modo_calificar = "Sin catálogo para validar"
+                    
                     if cat_avanzado and (subj_sugerido, crse_sugerido) in cat_avanzado:
                         horarios_permitidos = cat_avanzado[(subj_sugerido, crse_sugerido)]["schd"]
                         metodos_permitidos = cat_avanzado[(subj_sugerido, crse_sugerido)]["insm"]
+                        modos_calificar_permitidos = cat_avanzado[(subj_sugerido, crse_sugerido)]["gmod"]
                         
                         if horarios_permitidos:
                             if horario_original in horarios_permitidos: comentario_horario = "Horario OK"
@@ -379,12 +408,21 @@ with tab1:
                                 metodo_sugerido = sorted(metodos_permitidos)[0] if len(metodos_permitidos) == 1 else ""
                         else: comentario_metodo = "Sin restricciones en catálogo"
 
+                        if modos_calificar_permitidos:
+                            if modo_calificar_original in modos_calificar_permitidos: comentario_modo_calificar = "Modo de calificar OK"
+                            else:
+                                comentario_modo_calificar = f"Error. Permitidos: {', '.join(sorted(modos_calificar_permitidos))}"
+                                modo_calificar_sugerido = sorted(modos_calificar_permitidos)[0] if len(modos_calificar_permitidos) == 1 else ""
+                        else: comentario_modo_calificar = "Sin restricciones en catálogo"
+
                     resultados.append({
                         "Luz Verde": False, "idx": idx, "Archivo": fila.get("ArchivoOrigen"),
                         "Materia Excel": materia_excel, "Materia Catálogo": materia_catalogo, "Comentario Nombres": comentario_nombres,
                         "Subj Original": subj_original, "Crse Original": crse_original, "Subj Sugerido": subj_sugerido, "Crse Sugerido": crse_sugerido,
                         "Horario Original": horario_original, "Horario Sugerido": horario_sugerido, "Comentario Horario": comentario_horario,
                         "Método Original": metodo_original, "Método Sugerido": metodo_sugerido, "Comentario Método": comentario_metodo,
+                        "Modo de Calificar Original": modo_calificar_original, "Modo de Calificar Sugerido": modo_calificar_sugerido,
+                        "Comentario Modo de Calificar": comentario_modo_calificar,
                         "Llave_Cruce": f"{fila.get('ArchivoOrigen')}|{materia_excel}|{subj_original}|{crse_original}|{idx}"
                     })
 
@@ -400,12 +438,15 @@ with tab1:
         
         for archivo in df_auditoria["Archivo"].unique():
             df_archivo = df_auditoria[df_auditoria["Archivo"] == archivo]
-            filas_con_error = df_archivo[(~df_archivo["Comentario Nombres"].isin(["Nombre y Claves OK", "Todo correcto (Cat. Básico)"])) | 
-                                         (~df_archivo["Comentario Horario"].isin(["Horario OK", "Sin restricciones en catálogo", "Sin catálogo para validar"])) | 
-                                         (~df_archivo["Comentario Método"].isin(["Método OK", "Sin restricciones en catálogo", "Sin catálogo para validar"]))]
+            filas_con_error = df_archivo[
+                (~df_archivo["Comentario Nombres"].str.startswith("Todo correcto", na=False)) |
+                (~df_archivo["Comentario Horario"].isin(["Horario OK", "Sin restricciones en catálogo", "Sin catálogo para validar"])) |
+                (~df_archivo["Comentario Método"].isin(["Método OK", "Sin restricciones en catálogo", "Sin catálogo para validar"])) |
+                (~df_archivo["Comentario Modo de Calificar"].isin(["Modo de calificar OK", "Sin restricciones en catálogo", "Sin catálogo para validar"]))
+            ]
             
             if filas_con_error.empty:
-                st.success(f"✅ **{archivo}** — Claves, horarios y métodos validados.")
+                st.success(f"✅ **{archivo}** — Claves, horarios, métodos y modo de calificar validados.")
             else:
                 with st.expander(f"⚠️ **{archivo}** — ({len(filas_con_error)} advertencias detectadas)", expanded=True):
                     with st.form(key=f"form_{archivo}"):
@@ -413,17 +454,30 @@ with tab1:
                         with col_nombres:
                             df_editado_nombres = st.data_editor(filas_con_error[["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario Nombres", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]], hide_index=True, disabled=["Materia Excel", "Materia Catálogo", "Comentario Nombres", "Subj Original", "Crse Original"], column_config={"Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?")}, key=f"edit_nom_{archivo}", use_container_width=True)
                         with col_metodos:
-                            df_editado_metodos = st.data_editor(filas_con_error[["Luz Verde", "Materia Excel", "Horario Original", "Horario Sugerido", "Comentario Horario", "Método Original", "Método Sugerido", "Comentario Método"]], hide_index=True, disabled=["Materia Excel", "Horario Original", "Comentario Horario", "Método Original", "Comentario Método"], column_config={"Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?")}, key=f"edit_met_{archivo}", use_container_width=True)
+                            df_editado_metodos = st.data_editor(
+                                filas_con_error[[
+                                    "Luz Verde", "Materia Excel", "Horario Original", "Horario Sugerido", "Comentario Horario",
+                                    "Método Original", "Método Sugerido", "Comentario Método", "Modo de Calificar Original",
+                                    "Modo de Calificar Sugerido", "Comentario Modo de Calificar"
+                                ]],
+                                hide_index=True,
+                                disabled=[
+                                    "Materia Excel", "Horario Original", "Comentario Horario", "Método Original", "Comentario Método",
+                                    "Modo de Calificar Original", "Comentario Modo de Calificar"
+                                ],
+                                column_config={"Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?")},
+                                key=f"edit_met_{archivo}", use_container_width=True
+                            )
                         
                         if st.form_submit_button("💾 Confirmar Selección de Ambas Pestañas"):
                             df_final_edits = filas_con_error.copy()
                             df_final_edits["Luz Verde"] = df_editado_nombres["Luz Verde"] | df_editado_metodos["Luz Verde"]
                             df_final_edits[["Subj Sugerido", "Crse Sugerido"]] = df_editado_nombres[["Subj Sugerido", "Crse Sugerido"]]
-                            df_final_edits[["Horario Sugerido", "Método Sugerido"]] = df_editado_metodos[["Horario Sugerido", "Método Sugerido"]]
+                            df_final_edits[["Horario Sugerido", "Método Sugerido", "Modo de Calificar Sugerido"]] = df_editado_metodos[["Horario Sugerido", "Método Sugerido", "Modo de Calificar Sugerido"]]
                             
                             df_master = st.session_state.res_auditoria.copy().set_index("Llave_Cruce")
                             df_final_edits.set_index("Llave_Cruce", inplace=True)
-                            df_master.update(df_final_edits[["Luz Verde", "Subj Sugerido", "Crse Sugerido", "Horario Sugerido", "Método Sugerido"]])
+                            df_master.update(df_final_edits[["Luz Verde", "Subj Sugerido", "Crse Sugerido", "Horario Sugerido", "Método Sugerido", "Modo de Calificar Sugerido"]])
                             st.session_state.res_auditoria = df_master.reset_index()
                             st.rerun()
 
@@ -431,7 +485,7 @@ with tab1:
         if st.button("💾 Generar Bloque de Archivos CSV", type="primary", key="btn_generar_bloque_csv"):
             st.session_state.ready_for_download = False
             corregido = st.session_state.raw_altas.copy()
-            for col in ["Subject", "Course", "Tipo de Horario", "Método Educativo"]: 
+            for col in ["Subject", "Course", "Tipo de Horario", "Método Educativo", "Modo de Calificar"]: 
                 if col in corregido.columns: corregido[col] = corregido[col].astype(str)
 
             for _, fila in st.session_state.res_auditoria[st.session_state.res_auditoria["Luz Verde"]].iterrows():
@@ -439,6 +493,7 @@ with tab1:
                 if pd.notna(fila["Crse Sugerido"]): corregido.loc[fila["idx"], "Course"] = str(fila["Crse Sugerido"])
                 if pd.notna(fila["Horario Sugerido"]) and fila["Horario Sugerido"] != "": corregido.loc[fila["idx"], "Tipo de Horario"] = str(fila["Horario Sugerido"])
                 if pd.notna(fila["Método Sugerido"]) and fila["Método Sugerido"] != "": corregido.loc[fila["idx"], "Método Educativo"] = str(fila["Método Sugerido"])
+                if pd.notna(fila["Modo de Calificar Sugerido"]) and fila["Modo de Calificar Sugerido"] != "": corregido.loc[fila["idx"], "Modo de Calificar"] = str(fila["Modo de Calificar Sugerido"])
 
             def preparar_csv_banner(df_origen):
                 res = pd.DataFrame()
@@ -581,6 +636,11 @@ with tab1:
         if st.session_state.get("manual_materia_seleccionada") not in opc_mat: st.session_state.manual_materia_seleccionada = opc_mat[0]
         
         llave_materia = st.selectbox("Selecciona la materia correcta", options=opc_mat, format_func=lambda k: etiq_mat[k], key="manual_materia_seleccionada")
+        confirmar_materia = st.checkbox(
+            f"Confirmo que quiero agregar: {etiq_mat[llave_materia]}",
+            value=False,
+            key=f"confirmar_materia_{llave_materia[0]}_{llave_materia[1]}"
+        )
         
         cat_avanzado, _ = cargar_catalogo_avanzado()
         info_materia = cat_avanzado[llave_materia]
@@ -588,6 +648,7 @@ with tab1:
         # === LÓGICA DE FILTRADO DEPENDIENTE (HORARIOS <-> MÉTODOS) ===
         horarios_base = sorted(info_materia["schd"])
         metodos_base = sorted(info_materia["insm"])
+        modos_calificar_base = [""] + sorted(info_materia.get("gmod", set()))
         pares_validos = info_materia.get("pares", set())
 
         sel_horario = st.session_state.get("manual_horario", "")
@@ -625,7 +686,13 @@ with tab1:
             metodo_manual = st.selectbox("Método educativo", options=metodos_disp, key="manual_metodo")
             sede_manual = st.text_input("Sede", key="manual_sede").strip()
             estatus_manual = st.text_input("Estatus", key="manual_estatus").strip()
-            modo_calificar_manual = st.text_input("Modo de calificar", key="manual_modo_calificar").strip()
+            modo_calificar_manual = st.selectbox(
+                "Modo de calificar",
+                options=modos_calificar_base,
+                key="manual_modo_calificar",
+                # NOTA: st.selectbox no tiene "accept_new_options" en la librería estándar. 
+                # Si usas una librería externa cámbialo, o reemplázalo por text_input si el usuario debe poder escribir
+            ).strip()
             sesion_manual = st.text_input("Sesión", key="manual_sesion").strip()
 
         col_e1, col_e2, col_e3, col_extra4 = st.columns(4)
@@ -642,6 +709,9 @@ with tab1:
             )
 
         if st.button("Agregar materia seleccionada", type="primary", use_container_width=True, key="btn_agregar_manual"):
+            if not confirmar_materia:
+                st.warning("Confirma la materia seleccionada antes de agregarla. Así no se carga por accidente ni se modifica tu revisión.")
+                st.stop()
             if not cluster_manual:
                 st.warning("Selecciona un Dato Complementario / Clúster antes de agregar la materia.")
                 st.stop()
@@ -805,6 +875,8 @@ with tab1:
             use_container_width=True, 
             key="dl_csv_manual_btn"
         )
+
+
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
