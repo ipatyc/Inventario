@@ -759,37 +759,42 @@ with tab1:
                 else cluster_oficial(f.get("Clúster")), axis=1)
             return r[COLUMNAS_CSV].fillna("").to_csv(**CSV_KWARGS_R)
 
-        if st.button("💾 Generar CSV", type="primary", key="generar_csv_t1"):
-            try:
-                corregido, errores = construir_altas_corregidas()
-                if not errores.empty: raise ValueError("Hay secciones sin asignar. Revisa los errores.")
-                faltantes = set(COLUMNAS_ALTAS) - set(corregido.columns)
-                if faltantes: raise ValueError(f"Faltan columnas: {sorted(faltantes)}")
-                st.session_state.zip_file_bytes = None
-                st.session_state.csv_consolidado_bytes = None
+# ============================================================
+# GENERAR SOLICITUDES + CSV_ALTAS EN UN SOLO ZIP
+# ============================================================
 
-                if modo_csv == "Un CSV por cada Excel":
-                    buffer = io.BytesIO()
-                    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as z:
-                        for nombre, sub in corregido.groupby("ArchivoOrigen", sort=False):
-                            z.writestr(nombre.rsplit(".", 1)[0] + ".csv",
-                                       preparar_csv_banner(sub).encode("utf-8"))
-                    st.session_state.zip_file_bytes = buffer.getvalue()
-                else:
-                    st.session_state.csv_consolidado_bytes = preparar_csv_banner(corregido).encode("utf-8")
-
-                st.session_state.ready_for_download = True
-                st.session_state.modo_salida_csv_generado = modo_csv
-                st.success("CSV generados.")
-            except Exception as e: st.error(str(e))
-
-        if st.session_state.get("ready_for_download"):
-            if st.session_state.modo_salida_csv_generado == "Un CSV por cada Excel":
-                st.download_button("📥 Descargar ZIP", st.session_state.zip_file_bytes,
-                                   file_name="archivos_carga_banner.zip", mime="application/zip")
-            else:
-                st.download_button("📥 Descargar CSV", st.session_state.csv_consolidado_bytes,
-                                   file_name="archivos_carga_banner.csv", mime="text/csv")
+    if st.button("💾 Generar SOLICITUDES y CSV_ALTAS", type="primary",
+                 use_container_width=True, key="generar_salidas_t1"):
+        try:
+            corregido, errores = construir_altas_corregidas()
+    
+            if not errores.empty:
+                raise ValueError("Existen errores de secciones pendientes.")
+    
+            if "_FilaExcel" not in corregido.columns:
+                raise ValueError("No se conservó la columna interna _FilaExcel.")
+    
+            zip_final = generar_zip_altas(
+                corregido,
+                st.session_state.original_files_bytes,
+                preparar_csv_banner
+            )
+    
+            st.session_state["zip_solicitudes_csv_altas"] = zip_final
+            st.success("SOLICITUDES y CSV_ALTAS generados correctamente.")
+    
+        except Exception as e:
+            st.session_state["zip_solicitudes_csv_altas"] = None
+            st.error(f"No se pudieron generar los archivos: {e}")
+    
+    if st.session_state.get("zip_solicitudes_csv_altas"):
+        st.download_button(
+            "📥 Descargar SOLICITUDES + CSV_ALTAS (.ZIP)",
+            data=st.session_state["zip_solicitudes_csv_altas"],
+            file_name="ALTAS_PROCESADAS.zip",
+            mime="application/zip",
+            type="primary",
+            use_container_width=True)
 
     # 9. BUSCADOR MANUAL
     st.divider()
