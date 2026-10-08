@@ -335,6 +335,117 @@ tab1, tab_err, tab3 = st.tabs([
 ])
 
 # ============================================================
+# NOMBRES Y CARPETAS: SOLICITUDES + CSV_ALTAS
+# ============================================================
+
+def nombre_seguro(valor):
+    texto = limpiar_clave_texto(valor)
+    texto = re.sub(r'[\\/:*?"<>|]', "", texto)
+    return re.sub(r"\s+", " ", texto).strip()
+
+def nombre_archivo_altas(periodo, responsable, tipo, extension):
+    periodo, responsable = nombre_seguro(periodo), nombre_seguro(responsable)
+    if not periodo or not responsable:
+        raise ValueError("Falta Periodo o Responsable para generar el nombre.")
+    if tipo == "SOLICITUDES": return f"{periodo} {responsable} CRNs U-ERRE{extension}"
+    if tipo == "CSV_ALTAS": return f"{periodo} {responsable} CSV_ALTAS.csv"
+    raise ValueError(f"Tipo de archivo desconocido: {tipo}")
+
+def crear_solicitud_excel(df_grupo, archivos_originales):
+    """
+    Conserva el libro original y actualiza su hoja ALTAS.
+    Cada grupo debe proceder de un solo archivo original.
+    """
+    origenes = df_grupo["ArchivoOrigen"].dropna().unique().tolist()
+    if len(origenes) != 1:
+        raise ValueError("La solicitud reúne varios Excel originales; no se pueden combinar sus macros automáticamente.")
+
+    origen = origenes[0]
+    if origen not in archivos_originales:
+        raise ValueError(f"No se encontró el Excel original: {origen}")
+
+    extension = ".xlsm" if origen.lower().endswith(".xlsm") else ".xlsx"
+    wb = openpyxl.load_workbook(io.BytesIO(archivos_originales[origen]), keep_vba=(extension == ".xlsm"))
+    hoja = next((h for h in wb.sheetnames if h.strip().upper() == "ALTAS"), None)
+    if hoja is None: raise ValueError(f"{origen} no contiene la hoja ALTAS.")
+
+    ws = wb[hoja]
+    encabezados = {normalizar_para_busqueda(c.value): c.column for c in ws[1] if c.value is not None}
+    equivalencias = {
+        "Periodo": ["periodo"], "Responsable": ["responsable"],
+        "Subject": ["subject", "subj", "area"], "Course": ["course", "crse", "nocurso"],
+        "Sección": ["seccion", "grupo"], "Tipo de Horario": ["tipodehorario"],
+        "Método Educativo": ["metodoeducativo"], "Modo de Calificar": ["mododecalificar"]
+    }
+
+    # Solo actualizar filas que realmente pertenecen al grupo.
+    for _, fila in df_grupo.iterrows():
+        numero_excel = fila.get("_FilaExcel")
+        if pd.isna(numero_excel): raise ValueError(f"Falta _FilaExcel para {origen}.")
+        numero_excel = int(numero_excel)
+
+        for campo, alternativas in equivalencias.items():
+            if campo not in df_grupo.columns: continue
+            columna = next((encabezados[a] for a in alternativas if a in encabezados), None)
+            if columna is not None:
+                valor = fila.get(campo)
+                ws.cell(numero_excel, columna).value = None if pd.isna(valor) else str(valor)
+
+    salida = io.BytesIO()
+    wb.save(salida)
+    return salida.getvalue(), extension
+
+def generar_zip_altas(df_final, archivos_originales, funcion_csv):
+    """
+    Genera SOLICITUDES y CSV_ALTAS agrupados por Periodo + Responsable.
+    df_final ya debe contener las secciones corregidas globalmente.
+    """
+    obligatorias = ["Periodo", "Responsable", "ArchivoOrigen", "_FilaExcel", "Sección"]
+    faltantes = [c for c in obligatorias if c not in df_final.columns]
+    if faltantes: raise ValueError(f"Faltan columnas: {faltantes}")
+
+    df = df_final.copy()
+    df["Periodo"] = df["Periodo"].apply(limpiar_clave_texto)
+    df["Responsable"] = df["Responsable"].apply(nombre_seguro)
+
+    if df["Periodo"].eq("").any() or df["Responsable"].eq("").any():
+        raise ValueError("Hay registros sin Periodo o Responsable.")
+
+    # No permitir dos archivos con el mismo nombre dentro del ZIP.
+    nombres_usados = set()
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zip_salida:
+        for (periodo, responsable), grupo in df.groupby(["Periodo", "Responsable"], sort=False):
+            nombre_csv = nombre_archivo_altas(periodo, responsable, "CSV_ALTAS", ".csv")
+            ruta_csv = f"CSV_ALTAS/{nombre_csv}"
+            if ruta_csv in nombres_usados: raise ValueError(f"Nombre CSV duplicado: {ruta_csv}")
+
+            contenido_csv = funcion_csv(grupo)
+            if isinstance(contenido_csv, str): contenido_csv = contenido_csv.encode("utf-8")
+            zip_salida.writestr(ruta_csv, contenido_csv)
+            nombres_usados.add(ruta_csv)
+
+            # No se fusionan libros con macros de distintos orígenes.
+            origenes = grupo["ArchivoOrigen"].dropna().unique().tolist()
+            if len(origenes) != 1:
+                raise ValueError(
+                    f"{periodo} {responsable} aparece en varios Excel. "
+                    "El CSV puede consolidarse, pero la solicitud XLSM requiere conservar cada libro por separado."
+                )
+
+            contenido_excel, extension = crear_solicitud_excel(grupo, archivos_originales)
+            nombre_excel = nombre_archivo_altas(periodo, responsable, "SOLICITUDES", extension)
+            ruta_excel = f"SOLICITUDES/{nombre_excel}"
+            if ruta_excel in nombres_usados: raise ValueError(f"Nombre Excel duplicado: {ruta_excel}")
+
+            zip_salida.writestr(ruta_excel, contenido_excel)
+            nombres_usados.add(ruta_excel)
+
+    return buffer.getvalue()
+
+
+# ============================================================
 # PESTAÑA 1: VALIDACIÓN DE ALTAS, PA Y GENERACIÓN DE CSV
 # ============================================================
 
@@ -362,7 +473,7 @@ with tab1:
     file_cat_ext = c1.file_uploader("📚 Catálogo Avanzado", type=["csv", "xlsx"], key="cat_ext_t1")
     file_pa = c2.file_uploader("📊 PA (Opcional)", type=["csv"], key="pa_t1")
     file_restr = c3.file_uploader("📋 Restricciones (Opcional)", type=["xlsx"], key="restr_t1")
-    files_altas = c4.file_uploader("📁 Archivos ALTAS", type=["xlsx"], accept_multiple_files=True, key="altas_t1")
+    files_altas = c4.file_uploader("📁 Archivos ALTAS", type=["xlsx", "xlsm"], accept_multiple_files=True, key="altas_t1")
 
     st.info("Con PA se reservan los grupos existentes. Sin PA se revisan todas las ALTAS juntas.")
     modo_csv = st.radio("Salida CSV", ["Un CSV por cada Excel", "Un solo CSV consolidado"],
@@ -487,20 +598,31 @@ with tab1:
             if not catalogo: raise ValueError("Catálogo Avanzado sin materias válidas.")
             pa, avisos = leer_csv_pa(file_pa) if file_pa else (None, [])
             reglas = leer_restricciones_excel(file_restr) if file_restr else {}
-            piezas, errores_archivo = [], []
 
+            # Leer ALTAS y conservar los Excel originales con macros
+            piezas, errores_archivo = [], []
+            st.session_state.original_files_bytes = {}
+            
             for archivo in files_altas:
+                st.session_state.original_files_bytes[archivo.name] = archivo.getvalue()
                 libro = pd.ExcelFile(io.BytesIO(archivo.getvalue()))
                 hojas = [h for h in libro.sheet_names if h.strip().upper() == HOJA_ALTAS]
+            
                 if not hojas:
                     errores_archivo.append(f"{archivo.name}: falta hoja ALTAS")
                     continue
-                df = libro.parse(hojas[0], dtype=str).dropna(how="all")
+            
+                df = libro.parse(hojas[0], dtype=str)
+                df["_FilaExcel"] = range(2, len(df) + 2)
                 df.columns = [MAPA.get(normalizar_para_busqueda(c), c) for c in df.columns]
-                faltantes = set(["Periodo", "Subject", "Course", "Nivel", "Sección"]) - set(df.columns)
+                df = df.dropna(how="all").copy()
+            
+                faltantes = set(["Periodo", "Subject", "Course", "Nivel", "Sección", "Responsable"]) - set(df.columns)
                 if faltantes or df.columns.duplicated().any():
                     errores_archivo.append(f"{archivo.name}: columnas faltantes {sorted(faltantes)} o duplicadas")
                     continue
+            
+                df = df.dropna(subset=["Periodo", "Subject", "Course"], how="all").copy()
                 df["ArchivoOrigen"] = archivo.name
                 piezas.append(df)
 
