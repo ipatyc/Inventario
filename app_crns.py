@@ -330,11 +330,21 @@ def crear_solicitud_excel(df_grupo, archivos_originales):
     ws = wb[hoja]
 
     encabezados = {normalizar_para_busqueda(c.value): c.column for c in ws[1] if c.value is not None}
+
     campos = {
-        "Subject": ["subject", "subj", "area"], "Course": ["course", "crse", "nocurso"],
-        "Sección": ["seccion", "grupo"], "Tipo de Horario": ["tipodehorario"],
-        "Método Educativo": ["metodoeducativo"], "Modo de Calificar": ["mododecalificar"]
+        "Subject": ["subj", "subject", "area"],
+        "Course": ["course", "crse", "nocurso"],
+        "Sección": ["seccion", "grupo"],
+        "Tipo de Horario": ["tipohorario"],
+        "Método Educativo": ["metodoeducativo"],
+        "Modo de Calificar": ["modocalificar", "mododecalificar"],
+        "Parte de Periodo": ["parteperiodo"],
+        "Estatus": ["status", "estatus"],
+        "Capacidad": ["capacidad", "cupo"],
+        "Sesion": ["sesion"],
+        "Campus": ["sede", "campus"]
     }
+
 
     for _, fila in df_grupo.iterrows():
         numero = fila.get("_FilaExcel")
