@@ -1154,14 +1154,12 @@ with tab3:
                 df["_crse"].ne("") & df["_grupo"].ne("")].copy()
 
         df["_llave"] = df[["_periodo", "_nivel", "_cluster", "_subj", "_crse", "_grupo"]].agg("_".join, axis=1)
-        conflictos = df.groupby("_llave")["_nrc"].nunique()
-        conflictos = conflictos[conflictos > 1]
-        if not conflictos.empty:
-            raise ValueError(f"ARGOS tiene {len(conflictos)} combinaciones con NRC distintos. "
-                             f"Ejemplos: {conflictos.index.tolist()[:5]}")
+        
+        # Mantener la llave original de cruce, sin perder NRC distintos
+        df = df.drop_duplicates(subset=["_llave", "_nrc"]).copy()
+        mapa = df.groupby("_llave")["_nrc"].agg(lambda x: sorted(set(x))).to_dict()
+        return df, mapa
 
-        df = df.drop_duplicates(subset=["_llave"])
-        return df, dict(zip(df["_llave"], df[columnas["nrc"]]))
 
     def nivel_csv_t3(cluster):
         c = normalizar_para_cruce(cluster)
@@ -1180,15 +1178,35 @@ with tab3:
                 df["SUBJ"].apply(ultra_limpiar) + "_" + df["COURSE"].apply(ultra_limpiar) + "_" +
                 df["SECCION"].apply(ultra_limpiar_seccion))
 
+    
     def cruzar_nrc_t3(df_csv, mapa):
         llaves = llaves_csv_t3(df_csv)
-        nrc = llaves.map(mapa)
-        alertas = []
-        for llave in llaves[nrc.isna()].unique():
-            similares = difflib.get_close_matches(str(llave), list(mapa), n=1, cutoff=0.5)
-            alertas.append({"Llave sin NRC": llave,
-                            "Coincidencia ARGOS": similares[0] if similares else "Sin coincidencia"})
-        return nrc, alertas
+        resultados, alertas = [], []
+    
+        for i, llave in enumerate(llaves):
+            candidatos = mapa.get(llave, [])
+    
+            if len(candidatos) == 1:
+                resultados.append(candidatos[0])
+            elif len(candidatos) > 1:
+                resultados.append("")
+                alertas.append({
+                    "Fila CSV": i + 2, "Llave": llave,
+                    "NRC candidatos": ", ".join(candidatos),
+                    "Resultado": "Varios NRC: revisar"
+                })
+            else:
+                resultados.append("")
+                similares = difflib.get_close_matches(str(llave), list(mapa), n=3, cutoff=0.5)
+                alertas.append({
+                    "Fila CSV": i + 2, "Llave": llave,
+                    "NRC candidatos": "",
+                    "Resultado": "No encontrado",
+                    "Coincidencias cercanas": ", ".join(similares)
+                })
+    
+        return pd.Series(resultados, index=df_csv.index), alertas
+
 
     def leer_csv_t3(archivo):
         return pd.read_csv(io.BytesIO(archivo.getvalue()), dtype=str, encoding="utf-8-sig",
