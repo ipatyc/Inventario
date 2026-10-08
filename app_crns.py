@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
@@ -13,1447 +14,1317 @@ import difflib
 from difflib import SequenceMatcher
 from openpyxl.styles import Font, PatternFill, Alignment
 
-# ================= 1. CONFIGURACIÓN Y FUNCIONES ESTRUCTURALES =================
-HOJA_ALTAS = "ALTAS"
-HOJA_SALIDA_NRC = "NRC"  
-UMBRAL_FUZZY = 0.82  
+# ============================================================
+# 1. CONFIGURACIÓN GENERAL
+# ============================================================
 
-# Formato puro para Oracle Banner
+HOJA_ALTAS = "ALTAS"
+HOJA_SALIDA_NRC = "NRC"
+UMBRAL_FUZZY = 0.82
+
 CSV_KWARGS_R = {
-    'index': False,
-    'encoding': 'utf-8',
-    'sep': ',',
-    'lineterminator': '\n'
+    "index": False,
+    "encoding": "utf-8",
+    "sep": ",",
+    "lineterminator": "\n"
 }
 
-# Plantilla estricta de 24 columnas para el Clúster
 COLUMNAS_CLUSTER_FINAL = [
-    "Periodo", "CRN", "Tipo.de.Reunión", "Fecha.Inicio", "Fecha.Fin", "Dom", "Lun", 
-    "Mar", "Mie", "Jue", "Vie", "Sab", "horarioIni", "horarioFin", "Inicio.de.sesión", 
-    "edificio", "salon", "Tipo.de.horario", "indCategoria", "idInstructor", 
-    "responsabilidad", "Ind.principal", "ind.sobre.paso", "datocomplementario"
+    "Periodo", "CRN", "Tipo.de.Reunión", "Fecha.Inicio", "Fecha.Fin",
+    "Dom", "Lun", "Mar", "Mie", "Jue", "Vie", "Sab",
+    "horarioIni", "horarioFin", "Inicio.de.sesión", "edificio",
+    "salon", "Tipo.de.horario", "indCategoria", "idInstructor",
+    "responsabilidad", "Ind.principal", "ind.sobre.paso",
+    "datocomplementario"
 ]
 
+# ============================================================
+# 2. FUNCIONES DE LIMPIEZA
+# ============================================================
+
 def quitar_acentos(t):
-    if pd.isna(t) or t is None: 
-        return ""
-    return "".join(c for c in unicodedata.normalize("NFD", str(t)) if unicodedata.category(c) != "Mn")
+    if t is None or pd.isna(t): return ""
+    return "".join(c for c in unicodedata.normalize("NFD", str(t))
+                   if unicodedata.category(c) != "Mn")
 
 def normalizar_para_cruce(t):
-    if pd.isna(t) or t is None:
-        return ""
+    if t is None or pd.isna(t): return ""
     s = str(t).strip()
-    if s.endswith(".0"):
-        s = s[:-2]
+    if s.endswith(".0"): s = s[:-2]
     return quitar_acentos(s).upper().strip()
 
-def similitud(a, b): 
-    return SequenceMatcher(None, a, b).ratio()
+def similitud(a, b):
+    return SequenceMatcher(None, str(a), str(b)).ratio()
 
 def limpiar_clave_texto(val):
-    if pd.isna(val) or val is None:
-        return ""
+    if val is None or pd.isna(val): return ""
     s = str(val).strip()
-    if s.lower() == "nan" or s == "":
-        return ""
-    if s.endswith(".0"):
-        s = s[:-2]
-    return s
+    if s.lower() in ("nan", "none", ""): return ""
+    return s[:-2] if s.endswith(".0") else s
 
 def format_r_string(val):
-    if pd.isna(val) or val is None:
-        return np.nan
-    s = str(val).strip()
-    if s.lower() == "nan" or s == "":
-        return np.nan
-    if s.endswith(".0"): 
-        s = s[:-2]
-    return s
+    s = limpiar_clave_texto(val)
+    return s if s else np.nan
 
 def limpia_seccion_interna(x):
-    if pd.isna(x): 
-        return ""
-    s = str(x).strip()
-    if s.lower() == "nan" or s == "": 
-        return ""
-    if s.endswith(".0"): 
-        s = s[:-2]
-    if s.isdigit(): 
-        return f"{int(s):02d}"
-    return s
-
-def sin_espacios(x):
-    v = format_r_string(x)
-    if pd.isna(v): return ""
-    return str(v).replace(" ", "").upper()
-
-def limpiar_espacios_y_mayusculas(x):
-    if pd.isna(x): return ""
-    s = re.sub(r'\s+', ' ', str(x))
-    return s.strip().upper()
-
-def normalizar_para_busqueda(texto):
-    s = str(texto).lower()
-    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
-    return re.sub(r'[^a-z0-9]', '', s)
-
-def limpiar_nombre_columna(col):
-    if pd.isna(col): return ""
-    return " ".join(str(col).split())
-
-def normalizar_para_busqueda_t3(texto):
-    s = str(texto).lower()
-    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
-    return re.sub(r'[^a-z0-9]', '', s)
-
-def ultra_limpiar(x):
-    if pd.isna(x): return ""
-    s = str(x).strip().upper().replace(" ", "")
-    if s.endswith(".0"): s = s[:-2]
-    return s
-
-def ultra_limpiar_seccion(x):
-    if pd.isna(x): return ""
-    s = str(x).strip().upper().replace(" ", "")
-    if s.endswith(".0"): s = s[:-2]
+    s = limpiar_clave_texto(x)
     if s.isdigit(): return f"{int(s):02d}"
     return s
 
+def sin_espacios(x):
+    return limpiar_clave_texto(x).replace(" ", "").upper()
+
+def limpiar_espacios_y_mayusculas(x):
+    if x is None or pd.isna(x): return ""
+    return re.sub(r"\s+", " ", str(x)).strip().upper()
+
+def normalizar_para_busqueda(texto):
+    return re.sub(r"[^a-z0-9]", "", quitar_acentos(texto).lower())
+
+def limpiar_nombre_columna(col):
+    return " ".join(str(col).split()) if not pd.isna(col) else ""
+
+def normalizar_para_busqueda_t3(texto):
+    return normalizar_para_busqueda(texto)
+
+def ultra_limpiar(x):
+    return sin_espacios(x)
+
+def ultra_limpiar_seccion(x):
+    return limpia_seccion_interna(x).upper().replace(" ", "")
+
 def corregir_nivel_por_cluster_csv(cluster_val):
-    cluster_str = str(cluster_val).strip().lower()
-    if "posgrado" in cluster_str: return "POSGRADO"
-    elif "bachillerato" in cluster_str: return "BACHILLERATO"
-    else: return "LICENCIATURA"
+    c = normalizar_para_cruce(cluster_val)
+    if "POSGRADO" in c: return "POSGRADO"
+    if "BACHILLERATO" in c: return "BACHILLERATO"
+    return "LICENCIATURA"
 
 def simplificar_nombre(nombre):
     n = nombre.lower()
-    for basura in ['.xlsx', '.xls', '.csv', '_final', '_base', '_v1', '_v2', '_v3', '_v4', 'corregidas_', 'errores_']:
-        n = n.replace(basura, '')
+    for basura in [".xlsx", ".xls", ".csv", "_final", "_base", "_v1",
+                   "_v2", "_v3", "_v4", "corregidas_", "errores_"]:
+        n = n.replace(basura, "")
     return n.strip().replace(" ", "")
 
-# Inicialización de estados en memoria global
-if "original_files_bytes" not in st.session_state: st.session_state.original_files_bytes = {}
-if "res_auditoria" not in st.session_state: st.session_state.res_auditoria = None
-if "raw_altas" not in st.session_state: st.session_state.raw_altas = None
-if "ready_for_download" not in st.session_state: st.session_state.ready_for_download = False
-if "zip_file_bytes" not in st.session_state: st.session_state.zip_file_bytes = None
-if "csv_files_to_download" not in st.session_state: st.session_state.csv_files_to_download = {}
-if "delta_files" not in st.session_state: st.session_state.delta_files = {}
-if "final_argos_zip" not in st.session_state: st.session_state.final_argos_zip = None
-if "df_cruce_rapido" not in st.session_state: st.session_state.df_cruce_rapido = None
-if "df_delta_cache" not in st.session_state: st.session_state.df_delta_cache = None
-if "nombre_delta_cache" not in st.session_state: st.session_state.nombre_delta_cache = None
-if "llave_control_archivos" not in st.session_state: st.session_state.llave_control_archivos = ""
-if "archivo_final_bytes" not in st.session_state: st.session_state.archivo_final_bytes = None
-if "archivo_final_nombre" not in st.session_state: st.session_state.archivo_final_nombre = None
+def clave_seccion(valor):
+    s = limpiar_clave_texto(valor)
+    if s.isdigit() and int(s) <= 99: return f"{int(s):02d}"
+    return s.upper()
+
+# ============================================================
+# 3. LECTURA DEL CATÁLOGO PA (OPCIONAL)
+# ============================================================
+
+def leer_csv_pa(archivo):
+    """
+    PA:
+    Periodo = Periodo
+    Área = SUBJ
+    No. Curso = CRSE
+    Grupo = Sección
+    NRC = Identificador único
+
+    No modifica el CSV original.
+    """
+
+    datos = archivo.getvalue() if hasattr(archivo, "getvalue") else archivo
+    df = None
+
+    for encoding in ["utf-8-sig", "utf-8", "cp1252"]:
+        try:
+            df = pd.read_csv(io.BytesIO(datos), dtype=str, encoding=encoding,
+                             keep_default_na=False, sep=None, engine="python")
+            break
+        except (UnicodeError, pd.errors.ParserError):
+            continue
+
+    if df is None: raise ValueError("No se pudo leer el archivo PA.")
+
+    # Normalizar encabezados, incluyendo acentos
+    df.columns = [normalizar_para_busqueda(str(c).replace("Ã", "A")) for c in df.columns]
+    requeridas = ["periodo", "area", "nocurso", "grupo", "nrc"]
+    faltantes = [c for c in requeridas if c not in df.columns]
+    if faltantes: raise ValueError(f"PA: faltan columnas {faltantes}")
+
+    pa = df.copy()
+    for col in ["periodo", "area", "nocurso", "nrc"]:
+        pa[col] = pa[col].apply(normalizar_para_cruce)
+    pa["grupo"] = pa["grupo"].apply(clave_seccion)
+
+    pa = pa[pa["nrc"].ne("")].copy()
+    llaves = ["periodo", "area", "nocurso", "grupo"]
+
+    conflictos = pa.groupby("nrc")[llaves].nunique(dropna=False).gt(1).any(axis=1)
+    nrc_conflictivos = set(conflictos[conflictos].index)
+
+    # Un NRC repetido idéntico se toma una vez; uno contradictorio se conserva para revisión
+    pa_unica = pa.drop_duplicates(subset=["nrc"])
+    pa_reserva = pd.concat([
+        pa_unica[~pa_unica["nrc"].isin(nrc_conflictivos)],
+        pa[pa["nrc"].isin(nrc_conflictivos)]
+    ]).drop_duplicates(subset=["nrc"] + llaves)
+
+    advertencias = [
+        {"Tipo": "PA", "Detalle": f"NRC {nrc} tiene registros contradictorios; revisar."}
+        for nrc in sorted(nrc_conflictivos)
+    ]
+    return pa_reserva, advertencias
+
+# ============================================================
+# 4. ASIGNACIÓN GLOBAL DE SECCIONES
+# ============================================================
+
+def asignar_secciones_globales(df_altas, pa=None):
+    """
+    Revisa TODAS las ALTAS juntas, aunque sean varios Excel.
+    Llave: Periodo + SUBJ + CRSE.
+    PA opcional: reserva grupos existentes.
+    Licenciatura y Posgrado: 01 a 99.
+    Bachillerato: conserva sección original.
+    """
+
+    requeridas = ["Periodo", "Subject", "Course", "Nivel", "Sección"]
+    faltantes = [c for c in requeridas if c not in df_altas.columns]
+    if faltantes: raise ValueError(f"ALTAS: faltan columnas {faltantes}")
+
+    salida = df_altas.copy().reset_index(drop=True)
+    salida["Sección Original"] = salida["Sección"].apply(clave_seccion)
+    salida["Sección"] = salida["Sección Original"]
+    ocupadas, errores = {}, []
+
+    # Reservar secciones de PA
+    if pa is not None:
+        for _, fila in pa.iterrows():
+            llave = tuple(normalizar_para_cruce(fila[c]) for c in ["periodo", "area", "nocurso"])
+            grupo = clave_seccion(fila["grupo"])
+            if all(llave) and grupo: ocupadas.setdefault(llave, set()).add(grupo)
+
+    # Numerar todas las ALTAS de manera global
+    for i, fila in salida.iterrows():
+        nivel = normalizar_para_cruce(fila["Nivel"])
+        if nivel not in ["LICENCIATURA", "POSGRADO"]: continue
+
+        llave = tuple(normalizar_para_cruce(fila[c]) for c in ["Periodo", "Subject", "Course"])
+        if not all(llave):
+            errores.append({"Fila": i + 1, "Tipo": "Sección",
+                            "Detalle": "Periodo, SUBJ o CRSE vacío; no se puede asignar sección."})
+            salida.at[i, "Sección"] = ""
+            continue
+
+        usadas = ocupadas.setdefault(llave, set())
+        nueva = next((f"{n:02d}" for n in range(1, 100) if f"{n:02d}" not in usadas), None)
+
+        if nueva is None:
+            errores.append({"Fila": i + 1, "Tipo": "Sección",
+                            "Detalle": f"Sin secciones disponibles 01-99 para {llave}."})
+            salida.at[i, "Sección"] = ""
+        else:
+            salida.at[i, "Sección"] = nueva
+            usadas.add(nueva)
+
+    salida["Sección Modificada"] = salida["Sección Original"] != salida["Sección"]
+    return salida, pd.DataFrame(errores, columns=["Fila", "Tipo", "Detalle"])
+
+# ============================================================
+# 5. RESTRICCIONES DE ALTAS
+# ============================================================
+
+def leer_restricciones_excel(archivo):
+    """Carga todas las hojas del Excel de restricciones sin modificar sus datos."""
+    libro = pd.ExcelFile(archivo)
+    reglas = {}
+    for hoja in libro.sheet_names:
+        df = libro.parse(hoja, dtype=str).dropna(how="all")
+        df.columns = [limpiar_nombre_columna(c) for c in df.columns]
+        reglas[hoja] = df
+    return reglas
+
+def auditar_restricciones(df_altas, reglas):
+    """
+    Validación preliminar de periodo, campus, requerimiento y estatus.
+    Las reglas complejas por nivel, clúster y parte de periodo
+    requieren integración adicional.
+    """
+    columnas = ["Fila", "Tipo", "Detalle"]
+    if not reglas: return pd.DataFrame(columns=columnas)
+
+    tabla = next((t for t in reglas.values()
+                  if "Periodo" in t.columns and "Campus" in t.columns), None)
+    if tabla is None:
+        return pd.DataFrame([{"Fila": "", "Tipo": "Restricciones",
+                              "Detalle": "No se encontró una tabla con Periodo y Campus."}])
+
+    incidencias = []
+    for i, fila in df_altas.reset_index(drop=True).iterrows():
+        periodo = normalizar_para_cruce(fila.get("Periodo"))[-2:]
+        posibles = tabla[tabla["Periodo"].apply(normalizar_para_cruce) == periodo]
+
+        if posibles.empty:
+            incidencias.append({"Fila": i + 1, "Tipo": "Periodo",
+                                "Detalle": f"Periodo {periodo}: sin regla definida."})
+            continue
+
+        for col in ["Campus", "Requerimiento", "Estatus"]:
+            if col not in posibles.columns or col not in fila.index: continue
+            opciones = set()
+            for valor in posibles[col].dropna():
+                opciones.update(normalizar_para_cruce(v) for v in str(valor).split("/"))
+            opciones.discard("")
+            actual = normalizar_para_cruce(fila.get(col))
+            if actual and opciones and actual not in opciones:
+                incidencias.append({"Fila": i + 1, "Tipo": col,
+                                    "Detalle": f"{actual} no permitido para periodo {periodo}. "
+                                               f"Opciones: {', '.join(sorted(opciones))}"})
+
+    return pd.DataFrame(incidencias, columns=columnas)
+
+# ============================================================
+# 6. ESTADOS GLOBALES DE STREAMLIT
+# ============================================================
+
+ESTADOS_INICIALES = {
+    "original_files_bytes": {},
+    "res_auditoria": None,
+    "raw_altas": None,
+    "ready_for_download": False,
+    "zip_file_bytes": None,
+    "csv_files_to_download": {},
+    "csv_consolidado_bytes": None,
+    "delta_files": {},
+    "final_argos_zip": None,
+    "df_cruce_rapido": None,
+    "df_delta_cache": None,
+    "nombre_delta_cache": None,
+    "llave_control_archivos": "",
+    "archivo_final_bytes": None,
+    "archivo_final_nombre": None,
+    "cat_avanzado_cache": None,
+    "cat_avanzado_firma": None,
+    "indice_nombres_avanzado": None,
+    "cat_pa_cache": None,
+    "cat_pa_firma": None,
+    "advertencias_pa": [],
+    "reglas_restricciones": {},
+    "errores_restricciones": None,
+    "df_secciones_corregidas": None,
+    "errores_secciones": None,
+    "resumen_secciones": None,
+    "secciones_validadas": False
+}
+
+for clave, valor in ESTADOS_INICIALES.items():
+    if clave not in st.session_state:
+        st.session_state[clave] = valor
+
+# ============================================================
+# 7. CONFIGURACIÓN VISUAL
+# ============================================================
 
 st.set_page_config(page_title="Consola Iris Cavazos", page_icon="⚙️", layout="wide")
 st.title("⚙️ Consola de Control de Materias e Inyección de NRCs")
 st.markdown("---")
 
+# ============================================================
+# 8. CREACIÓN DE PESTAÑAS
+# ============================================================
+
 tab1, tab_err, tab3 = st.tabs([
-    "1️⃣ Proceso: Validación y Generar CSVs", 
-    "⚠️ Reporte de Errores (Extraer Delta)", 
+    "1️⃣ Proceso: Validación y Generar CSVs",
+    "⚠️ Reporte de Errores (Extraer Delta)",
     "2️⃣ Proceso: Inyección de NRCs Masiva (ARGOS)"
 ])
 
 # ============================================================
-# PESTAÑA 1: VALIDACIÓN, CSV Y AUTOCOMPLETADO
+# PESTAÑA 1: VALIDACIÓN DE ALTAS, PA Y GENERACIÓN DE CSV
 # ============================================================
+
 with tab1:
-    # --- 1. ENCABEZADO Y BOTÓN DE REINICIO ---
-    col_tit, col_btn = st.columns([4, 1])
-    with col_tit:
-        st.header("Validación de Claves, Horarios y Generación de CSV")
-    with col_btn:
-        # Limpia todas las variables de sesión para empezar desde cero
-        if st.button("🔄 Limpiar / Recomenzar", type="secondary", use_container_width=True, key="btn_limpiar_t1"):
-            claves_a_borrar = [
-                "file_cat_uploader", "file_cat_ext_uploader", "files_altas_uploader", "res_auditoria", 
-                "raw_altas", "ready_for_download", "modo_salida_csv", "zip_file_bytes", 
-                "csv_consolidado_bytes", "modo_salida_csv_generado", "cat_avanzado_cache", 
-                "cat_avanzado_firma", "df_manual_fijo", "manual_candidatos", "manual_busqueda_realizada", 
-                "manual_materia_seleccionada", "manual_archivo_visualizado", "manual_renglon_accion", 
-                "input_nom_busq", "input_subj_busq", "input_crse_busq", "manual_horario", "manual_metodo", 
-                "manual_periodo", "manual_parte_periodo", "manual_capacidad", "manual_seccion", 
-                "manual_sede", "manual_estatus", "manual_modo_calificar", "manual_sesion", "manual_grupos", 
-                "manual_integracion", "manual_nivel", "manual_cluster", "manual_materia_confirmada"
-            ]
-            for clave in claves_a_borrar:
-                if clave in st.session_state: del st.session_state[clave]
-            st.rerun()
+    st.header("⚙️ Validación de ALTAS y Generación de CSV")
 
-    # --- 2. ZONA DE CARGA DE ARCHIVOS ---
-    col1, col2, col3 = st.columns(3)
-    with col1: file_cat = st.file_uploader("📑 Catálogo Básico (Niveles)", type=["xlsx"], key="file_cat_uploader")
-    with col2: file_cat_ext = st.file_uploader("📚 Catálogo Avanzado (SCBCRSE)", type=["csv", "xlsx"], key="file_cat_ext_uploader")
-    with col3: files_altas = st.file_uploader("📁 Archivos ALTAS", accept_multiple_files=True, type=["xlsx"], key="files_altas_uploader")
+    # 1. REINICIAR
+    if st.button("🔄 Limpiar / Recomenzar", key="limpiar_t1"):
+        prefijos = ("manual_", "edit_nom_", "edit_met_")
+        claves = [
+            "cat_ext_t1", "pa_t1", "restr_t1", "altas_t1", "modo_csv_t1",
+            "raw_altas", "res_auditoria", "cat_pa_cache", "advertencias_pa",
+            "reglas_restricciones", "errores_restricciones", "errores_secciones",
+            "df_secciones_corregidas", "ready_for_download", "zip_file_bytes",
+            "csv_consolidado_bytes", "df_manual_fijo", "cat_avanzado_cache",
+            "cat_avanzado_firma", "indice_nombres_avanzado"
+        ]
+        claves += [k for k in st.session_state if k.startswith(prefijos)]
+        for k in claves: st.session_state.pop(k, None)
+        st.rerun()
 
-    # Configuración de salida de CSV si hay archivos cargados
-    modo_salida_csv = "Un CSV por cada Excel"
-    if files_altas:
-        modo_salida_csv = st.radio("¿Cómo deseas generar los CSV de los archivos ALTAS?", ["Un CSV por cada Excel", "Un solo CSV consolidado"], horizontal=True, key="modo_salida_csv")
+    # 2. CARGA DE ARCHIVOS
+    st.subheader("📁 Archivos de entrada")
+    c1, c2, c3, c4 = st.columns(4)
+    file_cat_ext = c1.file_uploader("📚 Catálogo Avanzado", type=["csv", "xlsx"], key="cat_ext_t1")
+    file_pa = c2.file_uploader("📊 PA (Opcional)", type=["csv"], key="pa_t1")
+    file_restr = c3.file_uploader("📋 Restricciones (Opcional)", type=["xlsx"], key="restr_t1")
+    files_altas = c4.file_uploader("📁 Archivos ALTAS", type=["xlsx"], accept_multiple_files=True, key="altas_t1")
 
-    columnas_esperadas = ["Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia", "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"]
-    mapa_huellas = {normalizar_para_busqueda(col): col for col in columnas_esperadas}
+    st.info("Con PA se reservan los grupos existentes. Sin PA se revisan todas las ALTAS juntas.")
+    modo_csv = st.radio("Salida CSV", ["Un CSV por cada Excel", "Un solo CSV consolidado"],
+                        horizontal=True, key="modo_csv_t1") if files_altas else "Un CSV por cada Excel"
 
-    # Valores permitidos para Dato Complementario / Clúster.
-    CLUSTERS_PERMITIDOS = [
-        "Ingenieria", "Bachillerato", "Negocios", "Ciencias Exactas",
-        "Posgrado Online", "Humanidades", "Idiomas y ADN", "TJYG",
-        "Smart Cities", "Ejecutivas", "EGEL",
-        "Intercambio", "Consejeria", "Posgrado"
-    ]
-    MAPA_CLUSTERS = {
-        normalizar_para_busqueda(cluster): cluster
-        for cluster in CLUSTERS_PERMITIDOS
-    }
+    COLUMNAS_ALTAS = ["Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia",
+                      "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario",
+                      "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"]
+    COLUMNAS_CSV = ["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS", "CAPACIDAD",
+                    "GRUPOS", "SECCION", "TIPODEHORARIO", "METODO_EDUCATIVO",
+                    "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION", "datocomplementario"]
+    ALIAS = {"area": "Subject", "subj": "Subject", "nocurso": "Course", "crse": "Course",
+             "materia": "Nombre de la Materia", "grupo": "Sección", "sede": "Campus",
+             "cupo": "Capacidad", "status": "Estatus"}
+    MAPA = {normalizar_para_busqueda(c): c for c in COLUMNAS_ALTAS}
+    MAPA.update(ALIAS)
 
-    UMBRAL_SIMILITUD_CLUSTER = 0.90
+    CLUSTERS = ["Ingenieria", "Bachillerato", "Negocios", "Ciencias Exactas", "Posgrado Online",
+                "Humanidades", "Idiomas y ADN", "TJYG", "Smart Cities", "Ejecutivas", "EGEL",
+                "Intercambio", "Consejeria", "Posgrado"]
 
-    def obtener_cluster_permitido(valor):
-        # Corrige solo clusters muy parecidos; los demás se conservan como llegaron.
-        cluster_original = format_r_string(valor)
-        cluster_normalizado = normalizar_para_busqueda(cluster_original)
+    def cluster_oficial(valor):
+        original = limpiar_clave_texto(valor)
+        return next((c for c in CLUSTERS if normalizar_para_busqueda(c) ==
+                     normalizar_para_busqueda(original)), original)
 
-        if cluster_normalizado in MAPA_CLUSTERS:
-            return MAPA_CLUSTERS[cluster_normalizado]
-
-        mejor_cluster, mejor_similitud = cluster_original, 0.0
-        for huella_cluster, cluster_oficial in MAPA_CLUSTERS.items():
-            coincidencia = similitud(cluster_normalizado, huella_cluster)
-            if coincidencia > mejor_similitud:
-                mejor_cluster, mejor_similitud = cluster_oficial, coincidencia
-
-        return mejor_cluster if mejor_similitud >= UMBRAL_SIMILITUD_CLUSTER else cluster_original
-
-    # --- 3. FUNCIÓN PARA CARGAR CATÁLOGO AVANZADO EN MEMORIA ---
+    # 3. CATÁLOGO AVANZADO
     def cargar_catalogo_avanzado():
-        firma_catalogo = f"{file_cat_ext.name}:{getattr(file_cat_ext, 'size', '')}" if file_cat_ext else None
-        if "cat_avanzado_cache" in st.session_state and st.session_state.get("cat_avanzado_firma") == firma_catalogo:
-            return st.session_state.cat_avanzado_cache, st.session_state.indice_nombres_avanzado
+        if file_cat_ext is None: return {}
+        firma = (file_cat_ext.name, file_cat_ext.size, hash(file_cat_ext.getvalue()))
+        if st.session_state.get("cat_avanzado_firma") == firma:
+            return st.session_state.get("cat_avanzado_cache") or {}
 
-        cat_avanzado, indice_nombres_avanzado = {}, {}
-        if file_cat_ext is not None:
-            try:
-                df_ext = pd.read_csv(file_cat_ext, dtype=str, encoding="utf-8", on_bad_lines="skip") if file_cat_ext.name.lower().endswith(".csv") else pd.read_excel(file_cat_ext, dtype=str)
-                df_ext.columns = [str(col).strip().upper() for col in df_ext.columns]
+        datos = io.BytesIO(file_cat_ext.getvalue())
+        df = pd.read_csv(datos, dtype=str, encoding="utf-8-sig", keep_default_na=False) \
+            if file_cat_ext.name.lower().endswith(".csv") else pd.read_excel(datos, dtype=str).fillna("")
+        df.columns = [str(c).strip().upper() for c in df.columns]
+        faltantes = set(["SCBCRSE_SUBJ_CODE", "SCBCRSE_CRSE_NUMB"]) - set(df.columns)
+        if faltantes: raise ValueError(f"Catálogo Avanzado: faltan {sorted(faltantes)}")
 
-                for _, row in df_ext.iterrows():
-                    subj, crse = sin_espacios(row.get("SCBCRSE_SUBJ_CODE")), sin_espacios(row.get("SCBCRSE_CRSE_NUMB"))
-                    if not subj or not crse: continue
+        catalogo = {}
+        for _, f in df.iterrows():
+            llave = (sin_espacios(f.get("SCBCRSE_SUBJ_CODE")), sin_espacios(f.get("SCBCRSE_CRSE_NUMB")))
+            if not all(llave): continue
+            info = catalogo.setdefault(llave, {"titles": set(), "schd": set(), "insm": set(),
+                                                "gmod": set(), "pares": set()})
+            for campo in ["SCBCRSE_TITLE", "SCRSYLN_LONG_COURSE_TITLE"]:
+                titulo = limpiar_espacios_y_mayusculas(f.get(campo, ""))
+                if titulo and titulo != "NAN": info["titles"].add(titulo)
 
-                    titulo_corto, titulo_largo = limpiar_espacios_y_mayusculas(row.get("SCBCRSE_TITLE")), limpiar_espacios_y_mayusculas(row.get("SCRSYLN_LONG_COURSE_TITLE"))
-                    horario, metodo = sin_espacios(row.get("SCRSCHD_SCHD_CODE")), sin_espacios(row.get("SCRSCHD_INSM_CODE"))
-                    modo_calificar = sin_espacios(row.get("SCRGMOD_GMOD_CODE"))
-                    llave = (subj, crse)
+            h, m = sin_espacios(f.get("SCRSCHD_SCHD_CODE")), sin_espacios(f.get("SCRSCHD_INSM_CODE"))
+            g = sin_espacios(f.get("SCRGMOD_GMOD_CODE"))
+            if h: info["schd"].add(h)
+            if m: info["insm"].add(m)
+            if g: info["gmod"].add(g)
+            if h or m: info["pares"].add((h, m))
 
-                    # AHORA GUARDAMOS LAS PAREJAS EXACTAS DE HORARIO-MÉTODO
-                    if llave not in cat_avanzado:
-                        cat_avanzado[llave] = {"titles": set(), "schd": set(), "insm": set(), "gmod": set(), "pares": set()}
+        st.session_state.cat_avanzado_cache = catalogo
+        st.session_state.cat_avanzado_firma = firma
+        return catalogo
 
-                    if titulo_corto and titulo_corto != "NAN":
-                        cat_avanzado[llave]["titles"].add(titulo_corto)
-                        indice_nombres_avanzado[normalizar_para_cruce(titulo_corto)] = llave
-                    if titulo_largo and titulo_largo != "NAN":
-                        cat_avanzado[llave]["titles"].add(titulo_largo)
-                        indice_nombres_avanzado[normalizar_para_cruce(titulo_largo)] = llave
-                    
-                    h_val = horario if horario and horario != "NAN" else ""
-                    m_val = metodo if metodo and metodo != "NAN" else ""
-                    
-                    if h_val: cat_avanzado[llave]["schd"].add(h_val)
-                    if m_val: cat_avanzado[llave]["insm"].add(m_val)
-                    if modo_calificar and modo_calificar != "NAN": cat_avanzado[llave]["gmod"].add(modo_calificar)
-                    if h_val or m_val: cat_avanzado[llave]["pares"].add((h_val, m_val))
+    # 4. VALIDACIÓN DE MATERIAS
+    def validar_materia(fila, catalogo):
+        subj, crse = sin_espacios(fila.get("Subject")), sin_espacios(fila.get("Course"))
+        nombre = limpiar_espacios_y_mayusculas(fila.get("Nombre de la Materia"))
+        horario, metodo = sin_espacios(fila.get("Tipo de Horario")), sin_espacios(fila.get("Método Educativo"))
+        modo = sin_espacios(fila.get("Modo de Calificar"))
 
-                st.session_state.cat_avanzado_cache, st.session_state.indice_nombres_avanzado = cat_avanzado, indice_nombres_avanzado
-                st.session_state.cat_avanzado_firma = firma_catalogo
-            except Exception as error:
-                st.error(f"Error al leer el Catálogo Avanzado: {error}")
-        return cat_avanzado, indice_nombres_avanzado
+        r = {"Luz Verde": False, "Materia Excel": nombre, "Materia Catálogo": "",
+             "Subj Original": subj, "Crse Original": crse, "Subj Sugerido": subj, "Crse Sugerido": crse,
+             "Horario Original": horario, "Horario Sugerido": horario,
+             "Método Original": metodo, "Método Sugerido": metodo,
+             "Modo de Calificar Original": modo, "Modo de Calificar Sugerido": modo,
+             "Comentario Nombres": "", "Comentario Horario": "", "Comentario Método": "",
+             "Comentario Modo de Calificar": ""}
 
-    # --- 4. VALIDACIÓN DE ARCHIVOS MASIVOS (ALTAS) ---
-    if files_altas and file_cat:
-        if st.button("⚡ Ejecutar Validación Inteligente", type="primary", key="btn_val_inteligente"):
-            st.session_state.ready_for_download = False
-            st.toast("Cargando Catálogos y validando...", icon="📑")
-            
-            cat_avanzado, indice_nombres_avanzado = cargar_catalogo_avanzado()
-            xls_cat = pd.ExcelFile(file_cat)
-            indice_cat, indice_cat_claves = {}, {}
+        llave = (subj, crse)
+        if llave not in catalogo:
+            candidatos = []
+            for (s, c), info in catalogo.items():
+                p_nombre = max([similitud(normalizar_para_cruce(nombre), normalizar_para_cruce(t))
+                                for t in info["titles"]] or [0])
+                p = p_nombre * 0.55 + similitud(subj, s) * 0.25 + similitud(crse, c) * 0.20
+                candidatos.append((p, s, c))
+            if not candidatos or max(candidatos)[0] < 0.63:
+                r["Comentario Nombres"] = "Materia no encontrada en catálogo"
+                return r
+            p, s, c = max(candidatos)
+            llave = (s, c)
+            r["Subj Sugerido"], r["Crse Sugerido"] = s, c
+            r["Comentario Nombres"] = f"Claves sugeridas (similitud {p:.0%})"
 
-            # Indexar catálogo básico
-            for hoja in xls_cat.sheet_names:
-                df_catalogo = xls_cat.parse(hoja)
-                if "Nivel" in df_catalogo.columns and "Materia" in df_catalogo.columns:
-                    for _, fila in df_catalogo.iterrows():
-                        nivel, materia, subj, crse = normalizar_para_cruce(fila.get("Nivel")), limpiar_espacios_y_mayusculas(fila.get("Materia")), sin_espacios(fila.get("Subj")), sin_espacios(fila.get("Crse"))
-                        indice_cat.setdefault(nivel, []).append({"mat_orig": materia, "mat_norm": normalizar_para_cruce(fila.get("Materia")), "subj": subj, "crse": crse})
-                        if subj and crse: indice_cat_claves[(normalizar_para_cruce(subj), crse)] = materia
+        info = catalogo[llave]
+        titulos = sorted(info["titles"])
+        r["Materia Catálogo"] = titulos[0] if titulos else ""
+        if not r["Comentario Nombres"]:
+            nombres = {normalizar_para_cruce(t) for t in titulos}
+            r["Comentario Nombres"] = "Todo correcto" if normalizar_para_cruce(nombre) in nombres \
+                else "Clave OK, pero Nombre difiere"
 
-            # Busca la coincidencia más cercana usando nombre, SUBJ y COURSE.
-            def buscar_mejor_coincidencia(materia, subj, crse, nivel):
-                candidatos = []
-
-                for (subj_cat, crse_cat), info in cat_avanzado.items():
-                    titulos = sorted(info["titles"]) or [""]
-                    candidatos.append({
-                        "subj": subj_cat, "crse": crse_cat, "materia": titulos[0],
-                        "titulos": titulos, "fuente": "Cat. Avanzado"
-                    })
-
-                basicos_nivel = indice_cat.get(nivel, [])
-                basicos = basicos_nivel or [fila for filas in indice_cat.values() for fila in filas]
-                for candidato in basicos:
-                    candidatos.append({
-                        "subj": candidato["subj"], "crse": candidato["crse"],
-                        "materia": candidato["mat_orig"], "titulos": [candidato["mat_orig"]],
-                        "fuente": "Cat. Básico"
-                    })
-
-                mejor, mejor_puntaje = None, -1.0
-                for candidato in candidatos:
-                    puntaje_nombre = max(
-                        [similitud(materia, normalizar_para_cruce(titulo)) for titulo in candidato["titulos"]] or [0.0]
-                    )
-                    puntaje_subj = 1.0 if subj == candidato["subj"] else similitud(subj, candidato["subj"])
-                    puntaje_crse = 1.0 if crse == candidato["crse"] else similitud(crse, candidato["crse"])
-                    puntaje = (puntaje_nombre * 0.55) + (puntaje_subj * 0.25) + (puntaje_crse * 0.20)
-
-                    if puntaje > mejor_puntaje:
-                        mejor, mejor_puntaje = candidato, puntaje
-
-                return mejor, mejor_puntaje
-
-            # Procesar archivos ALTAS
-            piezas, resultados = [], []
-            for archivo_altas in files_altas:
-                st.session_state.original_files_bytes[archivo_altas.name] = archivo_altas.getvalue()
-                xls_altas = pd.ExcelFile(archivo_altas)
-                hojas_reales = [h for h in xls_altas.sheet_names if h.strip().upper() == HOJA_ALTAS]
-                if not hojas_reales: continue
-
-                df_altas = xls_altas.parse(hojas_reales[0], dtype=str)
-                df_altas.columns = [mapa_huellas.get(normalizar_para_busqueda(col), col) for col in df_altas.columns]
-                
-                cols_esenciales = [c for c in ["Periodo", "Campus", "Subject", "Course"] if c in df_altas.columns]
-                if cols_esenciales: df_altas = df_altas.dropna(subset=cols_esenciales, how="all").dropna(how="all")
-                
-                if not df_altas.empty:
-                    df_altas["ArchivoOrigen"] = archivo_altas.name
-                    piezas.append(df_altas)
-
-            if piezas:
-                df_total = pd.concat(piezas, ignore_index=True)
-                st.session_state.raw_altas = df_total.copy()
-
-                # Validación fila por fila
-                for idx, fila in df_total.iterrows():
-                    nivel, materia_excel, subj_original, crse_original = normalizar_para_cruce(fila.get("Nivel")), limpiar_espacios_y_mayusculas(fila.get("Nombre de la Materia")), sin_espacios(fila.get("Subject")), sin_espacios(fila.get("Course"))
-                    horario_original, metodo_original = sin_espacios(fila.get("Tipo de Horario")), sin_espacios(fila.get("Método Educativo"))
-                    modo_calificar_original = sin_espacios(fila.get("Modo de Calificar"))
-                    materia_normalizada = normalizar_para_cruce(materia_excel)
-                    
-                    subj_sugerido, crse_sugerido, materia_catalogo, comentario_nombres = subj_original, crse_original, materia_excel, ""
-
-                    # Validación Nombres y Claves: compara contra ambos catálogos.
-                    mejor_candidato, mejor_puntaje = buscar_mejor_coincidencia(
-                        materia_normalizada, subj_original, crse_original, nivel
-                    )
-
-                    if mejor_candidato and mejor_puntaje >= 0.63:
-                        subj_sugerido = mejor_candidato["subj"]
-                        crse_sugerido = mejor_candidato["crse"]
-                        materia_catalogo = mejor_candidato["materia"]
-                        mismo_subj_crse = subj_original == subj_sugerido and crse_original == crse_sugerido
-                        mismo_nombre = materia_normalizada in [
-                            normalizar_para_cruce(titulo) for titulo in mejor_candidato["titulos"]
-                        ]
-
-                        if mismo_subj_crse and mismo_nombre:
-                            comentario_nombres = f"Todo correcto ({mejor_candidato['fuente']})"
-                        elif mismo_subj_crse:
-                            comentario_nombres = f"Clave OK, pero Nombre difiere ({mejor_candidato['fuente']})"
-                        else:
-                            comentario_nombres = (
-                                f"Claves sugeridas ({mejor_candidato['fuente']}, "
-                                f"similitud {mejor_puntaje:.0%})"
-                            )
-                    else:
-                        comentario_nombres = "No se encontró una coincidencia suficiente en ningún catálogo"
-
-                    # Validación Horarios, Métodos y Modo de Calificar
-                    horario_sugerido, metodo_sugerido = horario_original, metodo_original
-                    modo_calificar_sugerido = modo_calificar_original
-                    comentario_horario, comentario_metodo = "Sin catálogo para validar", "Sin catálogo para validar"
-                    comentario_modo_calificar = "Sin catálogo para validar"
-                    
-                    if cat_avanzado and (subj_sugerido, crse_sugerido) in cat_avanzado:
-                        horarios_permitidos = cat_avanzado[(subj_sugerido, crse_sugerido)]["schd"]
-                        metodos_permitidos = cat_avanzado[(subj_sugerido, crse_sugerido)]["insm"]
-                        modos_calificar_permitidos = cat_avanzado[(subj_sugerido, crse_sugerido)]["gmod"]
-                        
-                        if horarios_permitidos:
-                            if horario_original in horarios_permitidos: comentario_horario = "Horario OK"
-                            else:
-                                comentario_horario = f"Error. Permitidos: {', '.join(sorted(horarios_permitidos))}"
-                                horario_sugerido = sorted(horarios_permitidos)[0] if len(horarios_permitidos) == 1 else ""
-                        else: comentario_horario = "Sin restricciones en catálogo"
-
-                        if metodos_permitidos:
-                            if metodo_original in metodos_permitidos: comentario_metodo = "Método OK"
-                            else:
-                                comentario_metodo = f"Error. Permitidos: {', '.join(sorted(metodos_permitidos))}"
-                                metodo_sugerido = sorted(metodos_permitidos)[0] if len(metodos_permitidos) == 1 else ""
-                        else: comentario_metodo = "Sin restricciones en catálogo"
-
-                        if modos_calificar_permitidos:
-                            if modo_calificar_original in modos_calificar_permitidos: comentario_modo_calificar = "Modo de calificar OK"
-                            else:
-                                comentario_modo_calificar = f"Error. Permitidos: {', '.join(sorted(modos_calificar_permitidos))}"
-                                modo_calificar_sugerido = sorted(modos_calificar_permitidos)[0] if len(modos_calificar_permitidos) == 1 else ""
-                        else: comentario_modo_calificar = "Sin restricciones en catálogo"
-
-                    resultados.append({
-                        "Luz Verde": False, "idx": idx, "Archivo": fila.get("ArchivoOrigen"),
-                        "Materia Excel": materia_excel, "Materia Catálogo": materia_catalogo, "Comentario Nombres": comentario_nombres,
-                        "Subj Original": subj_original, "Crse Original": crse_original, "Subj Sugerido": subj_sugerido, "Crse Sugerido": crse_sugerido,
-                        "Horario Original": horario_original, "Horario Sugerido": horario_sugerido, "Comentario Horario": comentario_horario,
-                        "Método Original": metodo_original, "Método Sugerido": metodo_sugerido, "Comentario Método": comentario_metodo,
-                        "Modo de Calificar Original": modo_calificar_original, "Modo de Calificar Sugerido": modo_calificar_sugerido,
-                        "Comentario Modo de Calificar": comentario_modo_calificar,
-                        "Llave_Cruce": f"{fila.get('ArchivoOrigen')}|{materia_excel}|{subj_original}|{crse_original}|{idx}"
-                    })
-
-                st.session_state.res_auditoria = pd.DataFrame(resultados)
-                st.success("¡Revisión de catálogos finalizada!")
+        validaciones = [
+            ("schd", horario, "Horario", "Comentario Horario", "Horario Sugerido"),
+            ("insm", metodo, "Método", "Comentario Método", "Método Sugerido"),
+            ("gmod", modo, "Modo de calificar", "Comentario Modo de Calificar", "Modo de Calificar Sugerido")
+        ]
+        for campo, actual, etiqueta, comentario, sugerido in validaciones:
+            permitidos = info[campo]
+            if not permitidos: r[comentario] = "Sin restricciones en catálogo"
+            elif actual in permitidos: r[comentario] = f"{etiqueta} OK"
             else:
-                st.error(f"❌ Ninguno de los archivos subidos tiene filas válidas en la pestaña '{HOJA_ALTAS}'.")
+                r[comentario] = "Error. Permitidos: " + ", ".join(sorted(permitidos))
+                r[sugerido] = next(iter(permitidos)) if len(permitidos) == 1 else ""
 
-    # --- 5. MESA DE CONTROL (REVISIÓN DE ERRORES) ---
-    if st.session_state.res_auditoria is not None:
-        st.markdown("### ⚖️ Mesa de Control (Dividida en 2 Partes)")
-        df_auditoria = st.session_state.res_auditoria
-        
-        for archivo in df_auditoria["Archivo"].unique():
-            df_archivo = df_auditoria[df_auditoria["Archivo"] == archivo]
-            filas_con_error = df_archivo[
-                (~df_archivo["Comentario Nombres"].str.startswith("Todo correcto", na=False)) |
-                (~df_archivo["Comentario Horario"].isin(["Horario OK", "Sin restricciones en catálogo", "Sin catálogo para validar"])) |
-                (~df_archivo["Comentario Método"].isin(["Método OK", "Sin restricciones en catálogo", "Sin catálogo para validar"])) |
-                (~df_archivo["Comentario Modo de Calificar"].isin(["Modo de calificar OK", "Sin restricciones en catálogo", "Sin catálogo para validar"]))
+        if horario and metodo and info["pares"] and (horario, metodo) not in info["pares"]:
+            r["Comentario Método"] += " | Combinación horario-método no encontrada"
+        return r
+
+    # 5. VALIDACIÓN MASIVA
+    if files_altas and file_cat_ext and st.button("⚡ Ejecutar Validación Inteligente", type="primary", key="validar_t1"):
+        try:
+            catalogo = cargar_catalogo_avanzado()
+            if not catalogo: raise ValueError("Catálogo Avanzado sin materias válidas.")
+            pa, avisos = leer_csv_pa(file_pa) if file_pa else (None, [])
+            reglas = leer_restricciones_excel(file_restr) if file_restr else {}
+            piezas, errores_archivo = [], []
+
+            for archivo in files_altas:
+                libro = pd.ExcelFile(io.BytesIO(archivo.getvalue()))
+                hojas = [h for h in libro.sheet_names if h.strip().upper() == HOJA_ALTAS]
+                if not hojas:
+                    errores_archivo.append(f"{archivo.name}: falta hoja ALTAS")
+                    continue
+                df = libro.parse(hojas[0], dtype=str).dropna(how="all")
+                df.columns = [MAPA.get(normalizar_para_busqueda(c), c) for c in df.columns]
+                faltantes = set(["Periodo", "Subject", "Course", "Nivel", "Sección"]) - set(df.columns)
+                if faltantes or df.columns.duplicated().any():
+                    errores_archivo.append(f"{archivo.name}: columnas faltantes {sorted(faltantes)} o duplicadas")
+                    continue
+                df["ArchivoOrigen"] = archivo.name
+                piezas.append(df)
+
+            if errores_archivo: raise ValueError("\n".join(errores_archivo))
+            if not piezas: raise ValueError("No hay registros ALTAS válidos.")
+
+            total = pd.concat(piezas, ignore_index=True)
+            auditoria = []
+            for i, fila in total.iterrows():
+                r = validar_materia(fila, catalogo)
+                r.update({"idx": i, "Archivo": fila["ArchivoOrigen"]})
+                auditoria.append(r)
+
+            st.session_state.raw_altas = total
+            st.session_state.res_auditoria = pd.DataFrame(auditoria)
+            st.session_state.cat_pa_cache = pa
+            st.session_state.advertencias_pa = avisos
+            st.session_state.reglas_restricciones = reglas
+            st.session_state.errores_restricciones = auditar_restricciones(total, reglas)
+            st.session_state.ready_for_download = False
+            st.success(f"Validación terminada: {len(total)} registros en {len(piezas)} archivo(s).")
+        except Exception as e:
+            st.error(f"Error de validación: {e}")
+
+    # 6. MESA DE CONTROL
+    if st.session_state.get("res_auditoria") is not None:
+        st.divider()
+        st.subheader("⚖️ Mesa de Control")
+        auditoria = st.session_state.res_auditoria
+
+        for archivo in auditoria["Archivo"].unique():
+            sub = auditoria[auditoria["Archivo"] == archivo]
+            pendientes = sub[
+                ~sub["Comentario Nombres"].eq("Todo correcto") |
+                ~sub["Comentario Horario"].isin(["Horario OK", "Sin restricciones en catálogo"]) |
+                ~sub["Comentario Método"].isin(["Método OK", "Sin restricciones en catálogo"]) |
+                ~sub["Comentario Modo de Calificar"].isin(["Modo de calificar OK", "Sin restricciones en catálogo"])
             ]
-            
-            if filas_con_error.empty:
-                st.success(f"✅ **{archivo}** — Claves, horarios, métodos y modo de calificar validados.")
-            else:
-                with st.expander(f"⚠️ **{archivo}** — ({len(filas_con_error)} advertencias detectadas)", expanded=True):
-                    with st.form(key=f"form_{archivo}"):
-                        col_nombres, col_metodos = st.tabs(["PARTE 1: Nombres y Claves", "PARTE 2: Métodos y Horarios"])
-                        with col_nombres:
-                            df_editado_nombres = st.data_editor(filas_con_error[["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario Nombres", "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]], hide_index=True, disabled=["Materia Excel", "Materia Catálogo", "Comentario Nombres", "Subj Original", "Crse Original"], column_config={"Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?")}, key=f"edit_nom_{archivo}", use_container_width=True)
-                        with col_metodos:
-                            df_editado_metodos = st.data_editor(
-                                filas_con_error[[
-                                    "Luz Verde", "Materia Excel", "Horario Original", "Horario Sugerido", "Comentario Horario",
-                                    "Método Original", "Método Sugerido", "Comentario Método", "Modo de Calificar Original",
-                                    "Modo de Calificar Sugerido", "Comentario Modo de Calificar"
-                                ]],
-                                hide_index=True,
-                                disabled=[
-                                    "Materia Excel", "Horario Original", "Comentario Horario", "Método Original", "Comentario Método",
-                                    "Modo de Calificar Original", "Comentario Modo de Calificar"
-                                ],
-                                column_config={"Luz Verde": st.column_config.CheckboxColumn("¿Aplicar?")},
-                                key=f"edit_met_{archivo}", use_container_width=True
-                            )
-                        
-                        if st.form_submit_button("💾 Confirmar Selección de Ambas Pestañas"):
-                            df_final_edits = filas_con_error.copy()
-                            df_final_edits["Luz Verde"] = df_editado_nombres["Luz Verde"] | df_editado_metodos["Luz Verde"]
-                            df_final_edits[["Subj Sugerido", "Crse Sugerido"]] = df_editado_nombres[["Subj Sugerido", "Crse Sugerido"]]
-                            df_final_edits[["Horario Sugerido", "Método Sugerido", "Modo de Calificar Sugerido"]] = df_editado_metodos[["Horario Sugerido", "Método Sugerido", "Modo de Calificar Sugerido"]]
-                            
-                            df_master = st.session_state.res_auditoria.copy().set_index("Llave_Cruce")
-                            df_final_edits.set_index("Llave_Cruce", inplace=True)
-                            df_master.update(df_final_edits[["Luz Verde", "Subj Sugerido", "Crse Sugerido", "Horario Sugerido", "Método Sugerido", "Modo de Calificar Sugerido"]])
-                            st.session_state.res_auditoria = df_master.reset_index()
-                            st.rerun()
+            if pendientes.empty:
+                st.success(f"{archivo}: sin advertencias de catálogo.")
+                continue
 
-        # --- 6. GENERADOR MASIVO DE CSV ---
-        if st.button("💾 Generar Bloque de Archivos CSV", type="primary", key="btn_generar_bloque_csv"):
-            st.session_state.ready_for_download = False
-            corregido = st.session_state.raw_altas.copy()
-            for col in ["Subject", "Course", "Tipo de Horario", "Método Educativo", "Modo de Calificar"]: 
-                if col in corregido.columns: corregido[col] = corregido[col].astype(str)
+            with st.expander(f"⚠️ {archivo} — {len(pendientes)} advertencias"):
+                with st.form(f"form_{archivo}"):
+                    t1, t2 = st.tabs(["Nombres y Claves", "Horarios y Métodos"])
+                    cols_nom = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario Nombres",
+                                "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
+                    cols_met = ["Luz Verde", "Materia Excel", "Horario Original", "Horario Sugerido",
+                                "Comentario Horario", "Método Original", "Método Sugerido",
+                                "Comentario Método", "Modo de Calificar Original",
+                                "Modo de Calificar Sugerido", "Comentario Modo de Calificar"]
+                    with t1:
+                        nom = st.data_editor(pendientes[cols_nom], hide_index=True, use_container_width=True,
+                                             disabled=cols_nom[1:6], key=f"edit_nom_{archivo}")
+                    with t2:
+                        met = st.data_editor(pendientes[cols_met], hide_index=True, use_container_width=True,
+                                             disabled=["Materia Excel", "Horario Original", "Comentario Horario",
+                                                       "Método Original", "Comentario Método",
+                                                       "Modo de Calificar Original", "Comentario Modo de Calificar"],
+                                             key=f"edit_met_{archivo}")
 
-            for _, fila in st.session_state.res_auditoria[st.session_state.res_auditoria["Luz Verde"]].iterrows():
-                if pd.notna(fila["Subj Sugerido"]): corregido.loc[fila["idx"], "Subject"] = str(fila["Subj Sugerido"])
-                if pd.notna(fila["Crse Sugerido"]): corregido.loc[fila["idx"], "Course"] = str(fila["Crse Sugerido"])
-                if pd.notna(fila["Horario Sugerido"]) and fila["Horario Sugerido"] != "": corregido.loc[fila["idx"], "Tipo de Horario"] = str(fila["Horario Sugerido"])
-                if pd.notna(fila["Método Sugerido"]) and fila["Método Sugerido"] != "": corregido.loc[fila["idx"], "Método Educativo"] = str(fila["Método Sugerido"])
-                if pd.notna(fila["Modo de Calificar Sugerido"]) and fila["Modo de Calificar Sugerido"] != "": corregido.loc[fila["idx"], "Modo de Calificar"] = str(fila["Modo de Calificar Sugerido"])
+                    if st.form_submit_button("💾 Confirmar correcciones"):
+                        for i in pendientes.index:
+                            auditoria.at[i, "Luz Verde"] = bool(nom.at[i, "Luz Verde"] or met.at[i, "Luz Verde"])
+                            for c in ["Subj Sugerido", "Crse Sugerido"]: auditoria.at[i, c] = nom.at[i, c]
+                            for c in ["Horario Sugerido", "Método Sugerido", "Modo de Calificar Sugerido"]:
+                                auditoria.at[i, c] = met.at[i, c]
+                        st.session_state.res_auditoria = auditoria
+                        st.session_state.ready_for_download = False
+                        st.rerun()
 
-            def preparar_csv_banner(df_origen):
-                res = pd.DataFrame()
-                res["PERIODO"] = df_origen["Periodo"].apply(format_r_string)
-                res["SEDE"] = df_origen["Campus"].apply(format_r_string)
-                res["SUBJ"] = df_origen["Subject"].apply(sin_espacios)
-                res["COURSE"] = df_origen["Course"].apply(sin_espacios)
-                res["PARTEPERIODO"] = df_origen["Parte de Periodo"].apply(format_r_string)
-                res["STATUS"] = df_origen["Estatus"].apply(format_r_string)
-                res["CAPACIDAD"] = pd.to_numeric(df_origen["Capacidad"], errors="coerce").astype("Int64")
-                res["GRUPOS"] = pd.Series(1, index=res.index, dtype="Int64")
-                res["SECCION"] = pd.to_numeric(df_origen["Sección"], errors="coerce").astype("Int64")
-                res["TIPODEHORARIO"] = df_origen["Tipo de Horario"].apply(sin_espacios)
-                res["METODO_EDUCATIVO"] = df_origen["Método Educativo"].apply(sin_espacios)
-                res["SOCIODEINTEGRACION"] = "D2L"
-                res["MODODECALIFICAR"] = df_origen["Modo de Calificar"].apply(format_r_string)
-                res["SESION"] = df_origen["Sesion"].apply(format_r_string)
+        for titulo, datos in [
+            ("⚠️ Advertencias PA", st.session_state.get("advertencias_pa")),
+            ("📋 Restricciones", st.session_state.get("errores_restricciones"))
+        ]:
+            if isinstance(datos, list) and datos: st.subheader(titulo); st.dataframe(pd.DataFrame(datos), hide_index=True)
+            elif isinstance(datos, pd.DataFrame) and not datos.empty:
+                st.subheader(titulo); st.dataframe(datos, hide_index=True, use_container_width=True)
 
-                def aplicar_reglas_cluster(fila):
-                    nivel_actual = str(fila.get("Nivel", "")).strip().upper()
-                    cluster_excel = obtener_cluster_permitido(fila.get("Clúster"))
+        # 7. APLICAR CORRECCIONES Y SECCIONES GLOBALES
+        def construir_altas_corregidas():
+            df = st.session_state.raw_altas.copy()
+            aprobadas = st.session_state.res_auditoria
+            for _, f in aprobadas[aprobadas["Luz Verde"] == True].iterrows():
+                i = int(f["idx"])
+                for destino, origen in {
+                    "Subject": "Subj Sugerido", "Course": "Crse Sugerido",
+                    "Tipo de Horario": "Horario Sugerido", "Método Educativo": "Método Sugerido",
+                    "Modo de Calificar": "Modo de Calificar Sugerido"
+                }.items():
+                    valor = limpiar_clave_texto(f.get(origen))
+                    if valor: df.at[i, destino] = valor
+            return asignar_secciones_globales(df, st.session_state.get("cat_pa_cache"))
 
-                    if "BACHILLERATO" in nivel_actual:
-                        return "Bachillerato"
+        st.divider()
+        st.subheader("🔢 Validación global de secciones")
+        if st.button("🔄 Recalcular secciones", key="recalcular_t1"):
+            try:
+                df_sec, errores = construir_altas_corregidas()
+                st.session_state.df_secciones_corregidas = df_sec
+                st.session_state.errores_secciones = errores
+                st.session_state.ready_for_download = False
+            except Exception as e: st.error(str(e))
 
-                    return cluster_excel
+        df_sec = st.session_state.get("df_secciones_corregidas")
+        if isinstance(df_sec, pd.DataFrame):
+            cols = ["ArchivoOrigen", "Periodo", "Subject", "Course", "Nivel",
+                    "Sección Original", "Sección", "Sección Modificada"]
+            st.dataframe(df_sec[[c for c in cols if c in df_sec]], hide_index=True, use_container_width=True)
+            st.metric("Secciones modificadas", int(df_sec["Sección Modificada"].sum()))
 
-                res["datocomplementario"] = df_origen.apply(aplicar_reglas_cluster, axis=1)
-                
-                # Limpiar texto
-                for col in res.columns: res[col] = res[col].astype(str).str.replace('"', "", regex=False).str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
-                return res[["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS", "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO", "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION", "datocomplementario"]].to_csv(**CSV_KWARGS_R)
+        errores_sec = st.session_state.get("errores_secciones")
+        if isinstance(errores_sec, pd.DataFrame) and not errores_sec.empty:
+            st.error("Hay secciones sin asignar."); st.dataframe(errores_sec, hide_index=True)
 
-            st.session_state.csv_files_to_download, st.session_state.zip_file_bytes, st.session_state.csv_consolidado_bytes = {}, None, None
-            errores_encontrados = False
-            columnas_requeridas_csv = ["Periodo", "Campus", "Subject", "Course", "Nivel", "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"]
+        # 8. GENERACIÓN CSV
+        def preparar_csv_banner(df):
+            r = pd.DataFrame(index=df.index)
+            equivalencias = {
+                "PERIODO": "Periodo", "SEDE": "Campus", "SUBJ": "Subject", "COURSE": "Course",
+                "PARTEPERIODO": "Parte de Periodo", "STATUS": "Estatus",
+                "CAPACIDAD": "Capacidad", "SECCION": "Sección", "TIPODEHORARIO": "Tipo de Horario",
+                "METODO_EDUCATIVO": "Método Educativo", "MODODECALIFICAR": "Modo de Calificar",
+                "SESION": "Sesion"
+            }
+            for destino, origen in equivalencias.items(): r[destino] = df[origen].apply(format_r_string)
+            for c in ["SUBJ", "COURSE", "TIPODEHORARIO", "METODO_EDUCATIVO"]:
+                r[c] = r[c].apply(sin_espacios)
+            r["SECCION"] = df["Sección"].apply(clave_seccion)
+            r["CAPACIDAD"] = pd.to_numeric(r["CAPACIDAD"], errors="coerce").astype("Int64")
+            r["GRUPOS"], r["SOCIODEINTEGRACION"] = 1, "D2L"
+            r["datocomplementario"] = df.apply(
+                lambda f: "Bachillerato" if normalizar_para_cruce(f["Nivel"]) == "BACHILLERATO"
+                else cluster_oficial(f.get("Clúster")), axis=1)
+            return r[COLUMNAS_CSV].fillna("").to_csv(**CSV_KWARGS_R)
 
-            if modo_salida_csv == "Un CSV por cada Excel":
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    for nom_arch, sub in corregido.groupby("ArchivoOrigen"):
-                        faltantes = [c for c in columnas_requeridas_csv if c not in sub.columns]
-                        if faltantes:
-                            st.error(f"❌ Error en `{nom_arch}`. Faltan columnas: {', '.join(faltantes)}."); errores_encontrados = True; continue
-                        csv_string = preparar_csv_banner(sub)
-                        nombre_csv = f"{nom_arch.rsplit('.', 1)[0]}.csv" if "." in nom_arch else f"{nom_arch}.csv"
-                        zip_file.writestr(nombre_csv, csv_string.encode("utf-8"))
-                        st.session_state.csv_files_to_download[nombre_csv] = csv_string.encode("utf-8")
-                if not errores_encontrados: st.session_state.zip_file_bytes = zip_buffer.getvalue()
-            else:
-                for nom_arch, sub in corregido.groupby("ArchivoOrigen"):
-                    faltantes = [c for c in columnas_requeridas_csv if c not in sub.columns]
-                    if faltantes: st.error(f"❌ Faltan columnas en `{nom_arch}`: {', '.join(faltantes)}"); errores_encontrados = True
-                if not errores_encontrados: st.session_state.csv_consolidado_bytes = preparar_csv_banner(corregido).encode("utf-8")
+        if st.button("💾 Generar CSV", type="primary", key="generar_csv_t1"):
+            try:
+                corregido, errores = construir_altas_corregidas()
+                if not errores.empty: raise ValueError("Hay secciones sin asignar. Revisa los errores.")
+                faltantes = set(COLUMNAS_ALTAS) - set(corregido.columns)
+                if faltantes: raise ValueError(f"Faltan columnas: {sorted(faltantes)}")
+                st.session_state.zip_file_bytes = None
+                st.session_state.csv_consolidado_bytes = None
 
-            if not errores_encontrados:
+                if modo_csv == "Un CSV por cada Excel":
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as z:
+                        for nombre, sub in corregido.groupby("ArchivoOrigen", sort=False):
+                            z.writestr(nombre.rsplit(".", 1)[0] + ".csv",
+                                       preparar_csv_banner(sub).encode("utf-8"))
+                    st.session_state.zip_file_bytes = buffer.getvalue()
+                else:
+                    st.session_state.csv_consolidado_bytes = preparar_csv_banner(corregido).encode("utf-8")
+
                 st.session_state.ready_for_download = True
-                st.session_state.modo_salida_csv_generado = modo_salida_csv
-                st.rerun()
+                st.session_state.modo_salida_csv_generado = modo_csv
+                st.success("CSV generados.")
+            except Exception as e: st.error(str(e))
 
-        # Panel de descargas Masivo
-        if st.session_state.ready_for_download:
-            st.markdown("### 📥 Panel de Descarga")
-            modo_desc = st.session_state.modo_salida_csv_generado or modo_salida_csv
-            if modo_desc == "Un CSV por cada Excel":
-                st.download_button("📥 Descargar todos los CSV (.ZIP)", data=st.session_state.zip_file_bytes, file_name="archivos_carga_banner.zip", mime="application/zip", use_container_width=True, type="primary", key="dl_todos_csv_zip")
+        if st.session_state.get("ready_for_download"):
+            if st.session_state.modo_salida_csv_generado == "Un CSV por cada Excel":
+                st.download_button("📥 Descargar ZIP", st.session_state.zip_file_bytes,
+                                   file_name="archivos_carga_banner.zip", mime="application/zip")
             else:
-                st.download_button("📥 Descargar CSV consolidado", data=st.session_state.csv_consolidado_bytes, file_name="archivos_carga_banner.csv", mime="text/csv", use_container_width=True, type="primary", key="dl_csv_consolidado")
+                st.download_button("📥 Descargar CSV", st.session_state.csv_consolidado_bytes,
+                                   file_name="archivos_carga_banner.csv", mime="text/csv")
 
-    # ============================================================
-    # --- 7. MÓDULO MANUAL (BUSCADOR FLEXIBLE CON FORMULARIO) ---
-    # ============================================================
-    st.markdown("---")
-    tiene_archivos_altas = bool(files_altas)
-    
-    st.subheader("Visualizador de ALTAS y agregar registro" if tiene_archivos_altas else "Creación de CSV Manual")
-    st.caption("Agrega materias sueltas. Si buscas, el sistema autocompletará y filtrará las opciones de horario y método.")
-
-    if "df_manual_fijo" not in st.session_state: st.session_state.df_manual_fijo = pd.DataFrame(columns=["PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS", "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO", "METODO_EDUCATIVO", "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION", "datocomplementario"])
+    # 9. BUSCADOR MANUAL
+    st.divider()
+    st.subheader("🔍 Buscador y creación manual")
+    if "df_manual_fijo" not in st.session_state:
+        st.session_state.df_manual_fijo = pd.DataFrame(columns=COLUMNAS_CSV)
     if "manual_candidatos" not in st.session_state: st.session_state.manual_candidatos = []
-    if "manual_busqueda_realizada" not in st.session_state: st.session_state.manual_busqueda_realizada = False
 
-    archivo_destino_manual = None
-    if tiene_archivos_altas:
-        if st.session_state.raw_altas is None: st.info("Para agregar registros al Excel, primero ejecuta la Validación Inteligente arriba.")
+    with st.form("buscar_manual_t1"):
+        b1, b2, b3 = st.columns(3)
+        nombre = b1.text_input("Nombre", key="manual_nombre")
+        subj = b2.text_input("SUBJ", key="manual_subj")
+        crse = b3.text_input("COURSE", key="manual_crse")
+        buscar = st.form_submit_button("🪄 Buscar opciones")
+
+    if buscar:
+        if not file_cat_ext: st.warning("Carga el Catálogo Avanzado.")
+        elif not any([nombre, subj, crse]): st.warning("Escribe al menos un criterio.")
         else:
-            archivos_disp = sorted(st.session_state.raw_altas["ArchivoOrigen"].dropna().unique().tolist())
-            if archivos_disp and st.session_state.get("manual_archivo_visualizado") not in archivos_disp: st.session_state.manual_archivo_visualizado = archivos_disp[0]
-            archivo_destino_manual = st.selectbox("Excel que deseas visualizar y completar", options=archivos_disp, key="manual_archivo_visualizado")
+            cat = cargar_catalogo_avanzado()
+            candidatos = []
+            for (s, c), info in cat.items():
+                titulos = sorted(info["titles"])
+                pn = max([similitud(normalizar_para_busqueda(nombre), normalizar_para_busqueda(t))
+                          for t in titulos] or [0]) if nombre else 0
+                ps = similitud(sin_espacios(subj), s) if subj else 0
+                pc = similitud(sin_espacios(crse), c) if crse else 0
+                puntaje = (pn + ps + pc) / sum(bool(x) for x in [nombre, subj, crse])
+                if puntaje >= 0.45: candidatos.append((puntaje, s, c, titulos[0] if titulos else ""))
+            st.session_state.manual_candidatos = sorted(candidatos, reverse=True)[:20]
 
-    def buscar_candidatos_manual(cat_avanzado, nombre, subj, crse, limite=20):
-        nombre_norm, subj_norm, crse_norm = normalizar_para_busqueda(nombre) if nombre else "", normalizar_para_busqueda(subj) if subj else "", normalizar_para_busqueda(crse) if crse else ""
-        resultados = []
-        for (subj_cat, crse_cat), info in cat_avanzado.items():
-            subj_cat_norm, crse_cat_norm, puntaje, campos = normalizar_para_busqueda(subj_cat), normalizar_para_busqueda(crse_cat), 0.0, 0
-            if subj_norm:
-                sim = max(1.0 if subj_norm == subj_cat_norm else similitud(subj_norm, subj_cat_norm), 0.95 if subj_norm in subj_cat_norm or subj_cat_norm in subj_norm else 0.0)
-                if sim < 0.55: continue
-                puntaje += sim; campos += 1
-            if crse_norm:
-                sim = max(1.0 if crse_norm == crse_cat_norm else similitud(crse_norm, crse_cat_norm), 0.95 if crse_norm in crse_cat_norm or crse_cat_norm in crse_norm else 0.0)
-                if sim < 0.55: continue
-                puntaje += sim; campos += 1
-            
-            titulos = sorted(info["titles"])
-            titulo_elegido = titulos[0] if titulos else "SIN TÍTULO"
-            if nombre_norm:
-                sim = max([similitud(nombre_norm, normalizar_para_busqueda(t)) for t in titulos] or [0.0])
-                if any(nombre_norm in normalizar_para_busqueda(t) for t in titulos): sim = max(sim, 0.95)
-                if sim < 0.40 and not subj_norm and not crse_norm: continue
-                puntaje += sim; campos += 1
-                
-            if campos: resultados.append({"llave": (subj_cat, crse_cat), "titulo": titulo_elegido, "puntaje": puntaje / campos})
-        return sorted(resultados, key=lambda d: (-d["puntaje"], d["llave"]))[:limite]
-
-    # ST.FORM: ESTO EVITA QUE SE PIERDA EL TEXTO AL ESCRIBIR
-    st.markdown("#### 🔍 Buscador de materia")
-    with st.form("form_buscador_manual"):
-        col_busq1, col_busq2, col_busq3 = st.columns(3)
-        input_nombre_busq = col_busq1.text_input("Nombre o título", key="input_nom_busq").strip()
-        input_subj_busq = col_busq2.text_input("SUBJ", key="input_subj_busq").strip()
-        input_crse_busq = col_busq3.text_input("COURSE", key="input_crse_busq").strip()
-        
-        btn_buscar_manual = st.form_submit_button("🪄 Buscar opciones", type="secondary", use_container_width=True)
-
-    if btn_buscar_manual:
-        if not file_cat_ext: st.warning("Primero sube el Catálogo Avanzado para buscar.")
-        elif not input_nombre_busq and not input_subj_busq and not input_crse_busq: st.warning("Ingresa al menos un criterio (nombre, SUBJ o COURSE).")
-        else:
-            cat_avanzado, _ = cargar_catalogo_avanzado()
-            st.session_state.manual_candidatos = buscar_candidatos_manual(cat_avanzado, input_nombre_busq, input_subj_busq, input_crse_busq)
-            st.session_state.manual_busqueda_realizada = True
-            st.session_state.pop("manual_materia_seleccionada", None)
-
-    # --- 8. ZONA PARA AGREGAR LA MATERIA BUSCADA ---
     candidatos = st.session_state.manual_candidatos
     if candidatos:
-        opc_mat = [c["llave"] for c in candidatos]
-        etiq_mat = {c["llave"]: f"{c['llave'][0]} {c['llave'][1]} - {c['titulo']} ({c['puntaje']:.0%})" for c in candidatos}
-        if st.session_state.get("manual_materia_seleccionada") not in opc_mat: st.session_state.manual_materia_seleccionada = opc_mat[0]
-        
-        llave_materia = st.selectbox("Selecciona la materia correcta", options=opc_mat, format_func=lambda k: etiq_mat[k], key="manual_materia_seleccionada")
-        confirmar_materia = st.checkbox(
-            f"Confirmo que quiero agregar: {etiq_mat[llave_materia]}",
-            value=False,
-            key=f"confirmar_materia_{llave_materia[0]}_{llave_materia[1]}"
-        )
-        
-        cat_avanzado, _ = cargar_catalogo_avanzado()
-        info_materia = cat_avanzado[llave_materia]
-        
-        # === LÓGICA DE FILTRADO DEPENDIENTE (HORARIOS <-> MÉTODOS) ===
-        horarios_base = sorted(info_materia["schd"])
-        metodos_base = sorted(info_materia["insm"])
-        modos_calificar_base = [""] + sorted(info_materia.get("gmod", set()))
-        pares_validos = info_materia.get("pares", set())
+        opciones = [(s, c) for _, s, c, _ in candidatos]
+        etiquetas = {(s, c): f"{s} {c} - {t} ({p:.0%})" for p, s, c, t in candidatos}
+        llave = st.selectbox("Materia correcta", opciones, format_func=lambda x: etiquetas[x], key="manual_materia")
+        confirmar = st.checkbox(f"Confirmo: {etiquetas[llave]}", key=f"manual_confirmar_{llave}")
+        info = cargar_catalogo_avanzado()[llave]
 
-        sel_horario = st.session_state.get("manual_horario", "")
-        sel_metodo = st.session_state.get("manual_metodo", "")
+        d1, d2 = st.columns(2)
+        with d1:
+            horario = st.selectbox("Tipo de horario", [""] + sorted(info["schd"]), key="manual_horario")
+            periodo = st.text_input("Periodo", key="manual_periodo")
+            parte = st.text_input("Parte de periodo", key="manual_parte")
+            capacidad = st.text_input("Capacidad", key="manual_capacidad")
+            seccion = st.text_input("Sección", key="manual_seccion")
+        with d2:
+            metodos = sorted({m for h, m in info["pares"] if h == horario and m}) if horario else sorted(info["insm"])
+            opciones_metodo = [""] + metodos
+            if st.session_state.get("manual_metodo", "") not in opciones_metodo:
+                st.session_state.manual_metodo = ""
+            metodo = st.selectbox("Método educativo", opciones_metodo, key="manual_metodo")
+            sede = st.text_input("Sede", key="manual_sede")
+            estatus = st.text_input("Estatus", key="manual_estatus")
+            modo = st.selectbox("Modo de calificar", [""] + sorted(info["gmod"]), key="manual_modo")
+            sesion = st.text_input("Sesión", key="manual_sesion")
 
-        # Filtramos horarios si ya hay un método seleccionado
-        if sel_metodo and sel_metodo in metodos_base:
-            horarios_validos = sorted({h for h, m in pares_validos if m == sel_metodo and h})
-        else:
-            horarios_validos = horarios_base
+        e1, e2 = st.columns(2)
+        nivel = e1.selectbox("Nivel", ["LICENCIATURA", "BACHILLERATO", "POSGRADO"], key="manual_nivel")
+        cluster = e2.selectbox("Clúster", CLUSTERS, index=None, key="manual_cluster")
 
-        # Filtramos métodos si ya hay un horario seleccionado
-        if sel_horario and sel_horario in horarios_base:
-            metodos_validos = sorted({m for h, m in pares_validos if h == sel_horario and m})
-        else:
-            metodos_validos = metodos_base
-
-        horarios_disp = [""] + horarios_validos
-        metodos_disp = [""] + metodos_validos
-
-        # Evitar errores de Streamlit si la opción guardada ya no es válida tras el filtro
-        if sel_horario not in horarios_disp: st.session_state.manual_horario = ""
-        if sel_metodo not in metodos_disp: st.session_state.manual_metodo = ""
-        # ==============================================================
-
-        st.markdown("#### Datos para agregar la materia")
-        col_d1, col_d2 = st.columns(2)
-        with col_d1:
-            horario_manual = st.selectbox("Tipo de horario", options=horarios_disp, key="manual_horario")
-            periodo_manual = st.text_input("Periodo", key="manual_periodo").strip()
-            parte_periodo_manual = st.text_input("Parte de periodo", key="manual_parte_periodo").strip()
-            capacidad_manual = st.text_input("Capacidad", key="manual_capacidad").strip()
-            seccion_manual = st.text_input("Sección", key="manual_seccion").strip()
-        with col_d2:
-            metodo_manual = st.selectbox("Método educativo", options=metodos_disp, key="manual_metodo")
-            sede_manual = st.text_input("Sede", key="manual_sede").strip()
-            estatus_manual = st.text_input("Estatus", key="manual_estatus").strip()
-            modo_calificar_manual = st.selectbox(
-                "Modo de calificar",
-                options=modos_calificar_base,
-                key="manual_modo_calificar",
-                # NOTA: st.selectbox no tiene "accept_new_options" en la librería estándar. 
-                # Si usas una librería externa cámbialo, o reemplázalo por text_input si el usuario debe poder escribir
-            ).strip()
-            sesion_manual = st.text_input("Sesión", key="manual_sesion").strip()
-
-        col_e1, col_e2, col_e3, col_extra4 = st.columns(4)
-        with col_e1: grupos_manual = st.number_input("Grupos", min_value=1, value=1, step=1, key="manual_grupos")
-        with col_e2: nivel_manual = st.selectbox("Nivel", options=["LICENCIATURA", "BACHILLERATO", "POSGRADO"], key="manual_nivel")
-        with col_e3: integracion_manual = st.text_input("Socio de integración", value="D2L", key="manual_integracion").strip()
-        with col_extra4: 
-            cluster_manual = st.selectbox(
-                "Dato Complementario (Clúster)",
-                options=CLUSTERS_PERMITIDOS,
-                index=None,
-                placeholder="Selecciona un Clúster",
-                key="manual_cluster"
-            )
-
-        if st.button("Agregar materia seleccionada", type="primary", use_container_width=True, key="btn_agregar_manual"):
-            if not confirmar_materia:
-                st.warning("Confirma la materia seleccionada antes de agregarla. Así no se carga por accidente ni se modifica tu revisión.")
-                st.stop()
-            if not cluster_manual:
-                st.warning("Selecciona un Dato Complementario / Clúster antes de agregar la materia.")
-                st.stop()
-                
-            nuevo_renglon_manual = pd.DataFrame([{
-                "PERIODO": periodo_manual, "SEDE": sede_manual, "SUBJ": llave_materia[0], "COURSE": llave_materia[1],
-                "PARTEPERIODO": parte_periodo_manual, "STATUS": estatus_manual, "CAPACIDAD": capacidad_manual,
-                "GRUPOS": str(grupos_manual), "SECCION": seccion_manual, "TIPODEHORARIO": horario_manual,
-                "METODO_EDUCATIVO": metodo_manual, "SOCIODEINTEGRACION": integracion_manual or "D2L",
-                "MODODECALIFICAR": modo_calificar_manual, "SESION": sesion_manual,
-                "datocomplementario": "Bachillerato" if nivel_manual == "BACHILLERATO" else cluster_manual
-            }])
-
-            if tiene_archivos_altas:
-                if st.session_state.raw_altas is None or not archivo_destino_manual: st.warning("Primero ejecuta la validación y selecciona el Excel destino.")
-                else:
-                    titulo_mat = next(c["titulo"] for c in candidatos if c["llave"] == llave_materia)
-                    nuevo_renglon_excel = {col: "" for col in st.session_state.raw_altas.columns}
-                    nuevo_renglon_excel.update({
-                        "Periodo": periodo_manual, "Campus": sede_manual, "Subject": llave_materia[0], "Course": llave_materia[1],
-                        "Nivel": nivel_manual, "Nombre de la Materia": titulo_mat, "Parte de Periodo": parte_periodo_manual,
-                        "Estatus": estatus_manual, "Capacidad": capacidad_manual, "Sección": seccion_manual,
-                        "Tipo de Horario": horario_manual, "Método Educativo": metodo_manual, "Modo de Calificar": modo_calificar_manual,
-                        "Sesion": sesion_manual, "Clúster": cluster_manual, "ArchivoOrigen": archivo_destino_manual
-                    })
-                    st.session_state.raw_altas = pd.concat([st.session_state.raw_altas, pd.DataFrame([nuevo_renglon_excel])], ignore_index=True)
-                    st.success(f"Materia agregada al Excel `{archivo_destino_manual}`.")
+        if st.button("➕ Agregar materia", key="manual_agregar"):
+            if not confirmar or not cluster: st.warning("Confirma la materia y selecciona clúster.")
             else:
-                st.session_state.df_manual_fijo = pd.concat([st.session_state.df_manual_fijo, nuevo_renglon_manual], ignore_index=True)
-                st.success("Materia agregada a la tabla manual.")
-
-    elif st.session_state.manual_busqueda_realizada: st.info("No se encontraron coincidencias con esos datos.")
-
-    # --- 9. VISUALIZADOR DE TABLAS (EXCEL O MANUAL) ---
-    if tiene_archivos_altas and st.session_state.raw_altas is not None and archivo_destino_manual:
-        st.markdown("#### Vista previa del Excel seleccionado")
-        cols_vis = [c for c in ["Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia", "Parte de Periodo", "Estatus", "Capacidad", "Sección", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"] if c in st.session_state.raw_altas.columns]
-        st.dataframe(st.session_state.raw_altas.loc[st.session_state.raw_altas["ArchivoOrigen"] == archivo_destino_manual, cols_vis], hide_index=True, use_container_width=True)
-
-    # ============================================================
-    # TABLA MANUAL: SELECCIONAR, COPIAR, ELIMINAR O AGREGAR RENGLONES
-    # ============================================================
-    if not tiene_archivos_altas:
-        st.markdown("#### Tabla manual")
-
-        # La columna Seleccionar solo sirve para acciones; no se exporta al CSV.
-        df_editor_manual = st.session_state.df_manual_fijo.copy()
-        if "Seleccionar" not in df_editor_manual.columns:
-            df_editor_manual.insert(0, "Seleccionar", False)
-
-        df_editado = st.data_editor(
-            df_editor_manual,
-            num_rows="fixed", # Evita que se creen renglones por accidente al escribir abajo
-            use_container_width=True,
-            hide_index=True,
-            key="editor_manual_seguro",
-            column_config={
-                "Seleccionar": st.column_config.CheckboxColumn(
-                    "Seleccionar",
-                    default=False
-                )
-            }
-        )
-
-        seleccionados = df_editado.index[df_editado["Seleccionar"]].tolist()
-
-        # Guardamos los cambios de la tabla sin la columna de selección
-        # BUG FIX: Comparamos antes de guardar para no perder el foco mientras escribes
-        df_sin_seleccion = df_editado.drop(columns="Seleccionar")
-        if not st.session_state.df_manual_fijo.equals(df_sin_seleccion):
-            st.session_state.df_manual_fijo = df_sin_seleccion
-
-        col_accion1, col_accion2, col_accion3 = st.columns(3)
-
-        with col_accion1:
-            if st.button("Nuevo renglón", use_container_width=True, key="btn_nuevo_renglon_manual"):
-                # Toma automáticamente las columnas que sí existen en la tabla
-                nuevo_renglon_vacio = {col: "" for col in st.session_state.df_manual_fijo.columns}
-                nuevo_renglon_vacio["GRUPOS"] = "1"
-                nuevo_renglon_vacio["SOCIODEINTEGRACION"] = "D2L"
-
+                nuevo = dict(zip(COLUMNAS_CSV, [
+                    periodo, sede, llave[0], llave[1], parte, estatus, capacidad, "1",
+                    seccion, horario, metodo, "D2L", modo, sesion,
+                    "Bachillerato" if nivel == "BACHILLERATO" else cluster
+                ]))
                 st.session_state.df_manual_fijo = pd.concat(
-                    [st.session_state.df_manual_fijo, pd.DataFrame([nuevo_renglon_vacio])],
-                    ignore_index=True
-                )
-                st.rerun()
+                    [st.session_state.df_manual_fijo, pd.DataFrame([nuevo])], ignore_index=True)
+                st.success("Materia agregada.")
 
-        with col_accion2:
-            if st.button("Copiar seleccionados", use_container_width=True, key="btn_copiar_renglones_manual"):
-                if not seleccionados:
-                    st.warning("Marca al menos un renglón en la columna 'Seleccionar'.")
-                else:
-                    renglones_copia = st.session_state.df_manual_fijo.loc[seleccionados].copy()
-                    st.session_state.df_manual_fijo = pd.concat(
-                        [st.session_state.df_manual_fijo, renglones_copia],
-                        ignore_index=True
-                    )
-                    st.rerun()
+    # 10. TABLA MANUAL Y ACCIONES
+    st.subheader("📋 Tabla manual")
+    manual = st.session_state.df_manual_fijo.copy()
+    manual.insert(0, "Seleccionar", False)
+    editado = st.data_editor(manual, hide_index=True, num_rows="fixed",
+                             use_container_width=True, key="manual_editor")
+    seleccion = editado.index[editado["Seleccionar"]].tolist()
+    st.session_state.df_manual_fijo = editado.drop(columns="Seleccionar").copy()
 
-        with col_accion3:
-            if st.button("Eliminar seleccionados", use_container_width=True, key="btn_eliminar_renglones_manual"):
-                if not seleccionados:
-                    st.warning("Marca al menos un renglón en la columna 'Seleccionar'.")
-                else:
-                    st.session_state.df_manual_fijo = (
-                        st.session_state.df_manual_fijo
-                        .drop(index=seleccionados)
-                        .reset_index(drop=True)
-                    )
-                    st.rerun()
+    a1, a2, a3 = st.columns(3)
+    if a1.button("Nuevo renglón", key="manual_nuevo"):
+        nuevo = {c: "" for c in COLUMNAS_CSV}
+        nuevo.update({"GRUPOS": "1", "SOCIODEINTEGRACION": "D2L"})
+        st.session_state.df_manual_fijo = pd.concat(
+            [st.session_state.df_manual_fijo, pd.DataFrame([nuevo])], ignore_index=True)
+        st.rerun()
+    if a2.button("Copiar seleccionados", key="manual_copiar"):
+        if seleccion:
+            st.session_state.df_manual_fijo = pd.concat(
+                [st.session_state.df_manual_fijo, st.session_state.df_manual_fijo.loc[seleccion]],
+                ignore_index=True)
+            st.rerun()
+        else: st.warning("Selecciona un renglón.")
+    if a3.button("Eliminar seleccionados", key="manual_eliminar"):
+        if seleccion:
+            st.session_state.df_manual_fijo = st.session_state.df_manual_fijo.drop(
+                index=seleccion).reset_index(drop=True)
+            st.rerun()
+        else: st.warning("Selecciona un renglón.")
 
-        # --- 10. DESCARGA DEL ARCHIVO MANUAL ---
-        col_nom, col_desc = st.columns([3, 1])
-        nombre_csv_manual = col_nom.text_input("Nombre del archivo:", value="carga_manual.csv", key="nom_manual_seguro")
-        
-        # Al descargar usamos df_sin_seleccion para que no se incluya el checkbox
-        df_out_manual = df_sin_seleccion.copy()
-        
-        # 1. Aplicar format_r_string a las columnas de texto generales (Igual que en el CSV masivo)
-        columnas_r_string = ["PERIODO", "SEDE", "PARTEPERIODO", "STATUS", "MODODECALIFICAR", "SESION", "datocomplementario"]
-        for col in columnas_r_string:
-            if col in df_out_manual.columns:
-                df_out_manual[col] = df_out_manual[col].apply(format_r_string)
-        
-        # 2. Aplicar sin_espacios a las claves (Igual que en el CSV masivo)
-        for col in ["SUBJ", "COURSE", "TIPODEHORARIO", "METODO_EDUCATIVO"]: 
-            if col in df_out_manual.columns: 
-                df_out_manual[col] = df_out_manual[col].apply(sin_espacios)
-                
-        # 3. Forzar valores fijos y numéricos (Igual que en el CSV masivo)
-        if "GRUPOS" in df_out_manual.columns: 
-            df_out_manual["GRUPOS"] = pd.Series(1, index=df_out_manual.index, dtype="Int64")
-        if "SOCIODEINTEGRACION" in df_out_manual.columns: 
-            df_out_manual["SOCIODEINTEGRACION"] = "D2L"
-            
-        for col_num in ["CAPACIDAD", "SECCION"]:
-            if col_num in df_out_manual.columns: 
-                df_out_manual[col_num] = pd.to_numeric(df_out_manual[col_num], errors="coerce").astype("Int64")
+    # 11. DESCARGA MANUAL
+    nombre_manual = st.text_input("Nombre del CSV", "carga_manual.csv", key="manual_archivo")
+    df_out = st.session_state.df_manual_fijo.copy()
+    errores_manual = pd.DataFrame()
 
-        # 4. Limpieza final de texto: quitar comillas dobles y nulos de pandas
-        for col in df_out_manual.columns: 
-            if df_out_manual[col].dtype == object or pd.api.types.is_string_dtype(df_out_manual[col]):
-                df_out_manual[col] = df_out_manual[col].astype(str).str.replace('"', "", regex=False).str.strip().replace(["nan", "None", "<NA>", "NaN"], "")
-        
-        # 5. Forzar el ORDEN EXACTO de las columnas
-        orden_columnas = [
-            "PERIODO", "SEDE", "SUBJ", "COURSE", "PARTEPERIODO", "STATUS", 
-            "CAPACIDAD", "GRUPOS", "SECCION", "TIPODEHORARIO", "METODO_EDUCATIVO", 
-            "SOCIODEINTEGRACION", "MODODECALIFICAR", "SESION", "datocomplementario"
-        ]
-        columnas_existentes = [c for c in orden_columnas if c in df_out_manual.columns]
-        df_out_manual = df_out_manual[columnas_existentes]
+    if not df_out.empty:
+        temporal = pd.DataFrame({
+            "Periodo": df_out["PERIODO"], "Subject": df_out["SUBJ"],
+            "Course": df_out["COURSE"], "Sección": df_out["SECCION"],
+            "Nivel": df_out["datocomplementario"].apply(corregir_nivel_por_cluster_csv)
+        })
+        temporal, errores_manual = asignar_secciones_globales(
+            temporal, st.session_state.get("cat_pa_cache"))
+        df_out["SECCION"] = temporal["Sección"].values
 
-        col_desc.write(""); col_desc.write("") # Espaciado para alinear el botón
-        col_desc.download_button(
-            label="📥 Descargar CSV Manual", 
-            data=df_out_manual.to_csv(**CSV_KWARGS_R).encode("utf-8"),
-            file_name=nombre_csv_manual if nombre_csv_manual.endswith(".csv") else f"{nombre_csv_manual}.csv",
-            mime="text/csv", 
-            type="primary", 
-            use_container_width=True, 
-            key="dl_csv_manual_btn"
-        )
+    for c in ["SUBJ", "COURSE", "TIPODEHORARIO", "METODO_EDUCATIVO"]:
+        df_out[c] = df_out[c].apply(sin_espacios)
+    df_out["GRUPOS"], df_out["SOCIODEINTEGRACION"] = "1", "D2L"
+    df_out["CAPACIDAD"] = pd.to_numeric(df_out["CAPACIDAD"], errors="coerce").astype("Int64")
+    df_out["SECCION"] = df_out["SECCION"].apply(clave_seccion)
+
+    if not errores_manual.empty: st.error("Hay secciones sin asignar."); st.dataframe(errores_manual)
+    st.download_button("📥 Descargar CSV Manual", df_out[COLUMNAS_CSV].to_csv(**CSV_KWARGS_R).encode("utf-8"),
+                       file_name=nombre_manual if nombre_manual.endswith(".csv") else nombre_manual + ".csv",
+                       mime="text/csv", disabled=not errores_manual.empty)
+
+# ============================================================
+# FIN DE PESTAÑA 1
+# ============================================================
+
 
 
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
+
 with tab_err:
-    # --- ENCABEZADO Y BOTÓN DE REINICIO ---
-    col_tit_t2, col_btn_t2 = st.columns([4, 1])
-    with col_tit_t2:
-        st.header("⚠️ Reporte de Errores y Ensamblaje Final")
-    with col_btn_t2:
-        # Limpia todas las variables de sesión de esta pestaña
-        if st.button("🔄 Limpiar / Recomenzar", type="secondary", use_container_width=True, key="btn_limpiar_t2"):
-            claves_a_borrar_t2 = [
-                "df_delta_cache", "nombre_delta_cache", "llave_control_archivos", 
-                "archivo_final_bytes", "archivo_final_nombre", "ext_base_1", "ext_err_1", 
-                "suf_v1", "modo_1", "ed_vivo_1", "iny_base_2", "iny_err_2", "iny_corr_2", "suf_v2"
-            ]
-            for clave in claves_a_borrar_t2:
-                if clave in st.session_state: del st.session_state[clave]
-            st.rerun()
-            
-    st.markdown("Extrae filas con error, corrígelas y genera el archivo para la Pestaña 3.")
-    
-    # --- PASO 1: EXTRAER O EDITAR EL PEDACITO CON ERROR ---
-    st.subheader("✂️ 1. Extraer o corregir el pedacito con errores")
-    
-    col_ex1, col_ex2, col_ex3 = st.columns(3)
-    with col_ex1: file_base_ext = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="ext_base_1")
-    with col_ex2: file_err_ext = st.file_uploader("📊 2. Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ext_err_1")
-    with col_ex3: sufijo_version = st.text_input("🔢 Sufijo de versión (Ej: V1, V2):", value="V1", key="suf_v1")
-    
-    if file_base_ext and file_err_ext:
-        llave_actual = f"{file_base_ext.name}_{file_err_ext.name}_{sufijo_version}"
-        if st.session_state.llave_control_archivos != llave_actual:
-            st.session_state.df_delta_cache = None
-            st.session_state.nombre_delta_cache = None
-            st.session_state.llave_control_archivos = llave_actual
+    st.header("⚠️ Reporte de Errores y Ensamblaje Final")
 
-        if st.button("🔍 Cargar y Procesar Reporte de Errores", use_container_width=True, type="secondary", key="btn_cargar_reporte_errores"):
+    # 1. REINICIAR PESTAÑA
+    col_tit, col_btn = st.columns([4, 1])
+    with col_btn:
+        if st.button("🔄 Limpiar / Recomenzar", key="limpiar_t2", use_container_width=True):
+            claves = ["df_delta_cache", "nombre_delta_cache", "llave_control_archivos",
+                      "archivo_final_bytes", "archivo_final_nombre", "ext_base_1", "ext_err_1",
+                      "suf_v1", "modo_1", "ed_vivo_1", "iny_base_2", "iny_err_2",
+                      "iny_corr_2", "suf_v2", "firma_delta_t2", "firma_final_t2"]
+            for k in claves: st.session_state.pop(k, None)
+            st.rerun()
+
+    st.info("Extrae los registros con error de Banner, corrígelos y vuelve a integrarlos al CSV original.")
+
+    # 2. FUNCIONES AUXILIARES
+    def leer_csv_banner(archivo):
+        return pd.read_csv(io.BytesIO(archivo.getvalue()), dtype=str, encoding="utf-8-sig",
+                           keep_default_na=False, skip_blank_lines=True)
+
+    def leer_errores_banner(archivo, total_filas):
+        df = pd.read_excel(io.BytesIO(archivo.getvalue()), skiprows=2, dtype=str)
+        df.columns = [limpiar_nombre_columna(c) for c in df.columns]
+        columna = next((c for c in df.columns if "linea" in normalizar_para_busqueda(c)), None)
+        if columna is None: raise ValueError("No se encontró la columna 'Línea' en el reporte de Banner.")
+
+        indices, invalidas = [], []
+        for valor in df[columna].dropna().unique():
             try:
-                df_base = pd.read_csv(file_base_ext, encoding="utf-8", dtype=str)
-                df_err = pd.read_excel(file_err_ext, skiprows=2)
-                
-                df_err.columns = [limpiar_nombre_columna(c) for c in df_err.columns]
-                col_linea = [c for c in df_err.columns if "linea" in str(c).strip().lower().replace("í", "i")]
-                
-                if not col_linea:
-                    st.error("❌ No se encontró la columna 'Línea' en el reporte de errores. Verifica la estructura de tu archivo.")
-                else:
-                    nombre_col = col_linea[0]
-                    df_err = df_err.dropna(subset=[nombre_col])
-                    
-                    indices = [int(float(r)) - 2 for r in df_err[nombre_col].unique().tolist() if pd.notna(r) and 0 <= (int(float(r)) - 2) < len(df_base)]
-                    
-                    if indices:
-                        st.session_state.df_delta_cache = df_base.iloc[indices].copy()
-                        base_name_ext = file_base_ext.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
-                        st.session_state.nombre_delta_cache = f"{base_name_ext}_{sufijo_version}"
-                        st.success(f"🎉 Éxito: Se aislaron {len(indices)} filas con anomalías. Configura tu descarga abajo.")
-                    else:
-                        st.warning("⚠️ No se identificaron números de línea válidos dentro de las dimensiones del archivo base.")
-            except Exception as e:
-                st.error(f"❌ Error crítico de lectura física: {str(e)}")
+                numero = float(str(valor).strip())
+                if not numero.is_integer(): raise ValueError()
+                indice = int(numero) - 2  # Banner cuenta encabezado como línea 1
+                if 0 <= indice < total_filas: indices.append(indice)
+                else: invalidas.append(str(valor))
+            except (ValueError, TypeError):
+                invalidas.append(str(valor))
 
-    if st.session_state.df_delta_cache is not None:
-        st.markdown("---")
-        modo_delta = st.radio("⚙️ ¿Cómo deseas descargar o corregir el fragmento?", ["Excel (.xlsx)", "CSV (.csv)", "Editar en vivo"], horizontal=True, key="modo_1")
-        
-        nombre_archivo = st.session_state.nombre_delta_cache
-        df_delta = st.session_state.df_delta_cache
-        
-        if modo_delta == "Excel (.xlsx)":
-            buf = io.BytesIO()
-            df_delta.to_excel(buf, index=False)
-            st.download_button("📥 Descargar Fragmento (.xlsx)", data=buf.getvalue(), file_name=f"{nombre_archivo}.xlsx", type="primary", use_container_width=True, key="dl_frag_xlsx")
-        
-        elif modo_delta == "CSV (.csv)":
-            st.download_button("📥 Descargar Fragmento (.csv)", data=df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary", use_container_width=True, key="dl_frag_csv")
-        
-        else:
-            st.info("✏️ **Modo Edición Interactiva:** Escribe tus ajustes directamente en las celdas de la tabla. Al finalizar, haz clic en el botón inferior para exportarlo.")
-            df_editado = st.data_editor(df_delta, key="ed_vivo_1", use_container_width=True)
-            st.download_button("📥 Descargar Parche Corregido (.csv)", data=df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"), file_name=f"{nombre_archivo}.csv", type="primary", use_container_width=True, key="dl_parche_corr_csv")
+        indices = list(dict.fromkeys(indices))
+        if invalidas:
+            raise ValueError("El reporte contiene líneas inválidas o fuera del CSV: " +
+                             ", ".join(invalidas[:15]))
+        if not indices: raise ValueError("No se encontraron líneas válidas con errores.")
+        return indices
 
-    # --- PASO 2: INYECTAR Y CREAR EL ARCHIVO FINAL ---
-    st.subheader("💉 2. Inyectar correcciones y generar Archivo Final")
-    
-    col_in1, col_in2, col_in3 = st.columns(3)
-    with col_in1: file_base_iny = st.file_uploader("📁 1. Archivo Base (.csv)", type=["csv"], key="iny_base_2")
-    with col_in2: file_err_iny = st.file_uploader("📊 2. Reporte de Errores (.xlsx)", type=["xlsx"], key="iny_err_2")
-    with col_in3: 
-        file_corr_iny = st.file_uploader("📝 3. Fragmento Corregido", type=["csv", "xlsx"], key="iny_corr_2")
-        tipo_final = st.text_input("Etiqueta final (V1, V2, final):", value="final", key="suf_v2")
-    
-    if file_base_iny and file_err_iny and file_corr_iny:
-        if st.button("🚀 Ensamblar Archivo Final", type="primary", key="btn_ensamblar_archivo_final"):
-            try: 
-                df_base = pd.read_csv(file_base_iny, encoding="utf-8", dtype=str)
-                df_err = pd.read_excel(file_err_iny, skiprows=2)
-                
-                col_linea_iny = [c for c in df_err.columns if "linea" in str(c).strip().lower().replace("í", "i")]
-                
-                if not col_linea_iny:
-                    st.error("❌ No se encontró la columna 'Línea' en el reporte.")
-                else:
-                    nombre_col_iny = col_linea_iny[0]
-                    df_err = df_err.dropna(subset=[nombre_col_iny])
-                    df_corr = pd.read_excel(file_corr_iny, dtype=str) if file_corr_iny.name.endswith('.xlsx') else pd.read_csv(file_corr_iny, encoding="utf-8", dtype=str)
-                    
-                    indices = [int(float(r)) - 2 for r in df_err[nombre_col_iny].unique().tolist() if pd.notna(r) and 0 <= (int(float(r)) - 2) < len(df_base)]
-                    
-                    if len(indices) == len(df_corr):
-                        df_final = df_base.copy()
-                        for col in df_final.columns:
-                            if col in df_corr.columns: df_final.iloc[indices, df_final.columns.get_loc(col)] = df_corr[col].values
-                        
-                        for col in df_final.columns:
-                            df_final[col] = df_final[col].astype(str).str.replace('"', '', regex=False).str.strip().replace(['nan', 'None', '<NA>', 'NaN'], '')
-                        
-                        base_name_iny = file_base_iny.name.rsplit('.', 1)[0].replace("_base", "").replace("_final", "")
-                        out_name = f"{base_name_iny}_{tipo_final}.csv"
-                        
-                        st.session_state.archivo_final_bytes = df_final.to_csv(**CSV_KWARGS_R).encode("utf-8")
-                        st.session_state.archivo_final_nombre = out_name
-                        st.success(f"🎉 ¡Archivo {out_name} listo! Da clic en el botón debajo para descargar.")
-                    else:
-                        st.error(f"❌ Desajuste de filas: {len(indices)} errores en Banner vs {len(df_corr)} filas corregidas en tu archivo.")
-            except Exception as e:
-                st.error(f"❌ Error interno al ensamblar: {str(e)}")
+    def nombre_base_t2(nombre):
+        return re.sub(r"(?i)_(base|final|v\d+)$", "", nombre.rsplit(".", 1)[0])
 
-    if st.session_state.archivo_final_bytes is not None:
-        st.download_button(
-            label=f"📁 📥 DESCARGAR {st.session_state.archivo_final_nombre}", 
-            data=st.session_state.archivo_final_bytes, 
-            file_name=st.session_state.archivo_final_nombre, 
-            type="primary", 
-            use_container_width=True,
-            key="dl_archivo_final_ensamblado"
-        )
-# ============================================================
-# PESTAÑA 3: INYECCIÓN DE NRCS Y CRUCES CON ARGOS
-# ============================================================
-with tab3:
-    # --- ENCABEZADO Y BOTÓN DE REINICIO ---
-    col_tit_t3, col_btn_t3 = st.columns([4, 1])
-    with col_tit_t3:
-        st.header("Inyección de NRCs y Cruces con ARGOS")
-    with col_btn_t3:
-        # Limpia todas las variables de sesión de esta pestaña
-        if st.button("🔄 Limpiar / Recomenzar", type="secondary", use_container_width=True, key="btn_limpiar_t3"):
-            claves_a_borrar_t3 = [
-                "modo_inyeccion_t3", "arg_c", "csv_c", "xls_c", "final_argos_zip", 
-                "arg_r", "csv_r", "df_cruce_rapido", "columnas_copia_rapida"
-            ]
-            for clave in claves_a_borrar_t3:
-                if clave in st.session_state: del st.session_state[clave]
-            st.rerun()
-            
-    modo_inyeccion = st.radio(
-        "🛠️ **Elige tu escenario de archivos disponibles:**",
-        ["📦 Completo (Tengo ARGOS, CSV Final y Excel Original)", 
-         "⚡ Rápido (Tengo ARGOS y CSV Final)"],
-        horizontal=True,
-        key="modo_inyeccion_t3"
+    # ========================================================
+    # 3. EXTRAER O EDITAR REGISTROS CON ERRORES
+    # ========================================================
+    st.subheader("✂️ 1. Extraer registros con errores")
+
+    c1, c2, c3 = st.columns(3)
+    file_base_ext = c1.file_uploader("📁 Archivo Base (.csv)", type=["csv"], key="ext_base_1")
+    file_err_ext = c2.file_uploader("📊 Reporte de Errores Banner (.xlsx)", type=["xlsx"], key="ext_err_1")
+    sufijo = c3.text_input("Versión del fragmento", value="V1", key="suf_v1")
+
+    firma_delta = (
+        (file_base_ext.name, file_base_ext.getvalue(), file_err_ext.name, file_err_ext.getvalue(), sufijo)
+        if file_base_ext and file_err_ext else None
     )
-    st.markdown("---")
 
-    columnas_esperadas_t3 = [
-        "Periodo", "Campus", "Subject", "Course", "Nivel", "Nombre de la Materia",
-        "Parte de Periodo", "Estatus", "Capacidad", "Sección", 
-        "Tipo de Horario", "Método Educativo", "Modo de Calificar", "Sesion", "Clúster"
-    ]
-    mapa_huellas_t3 = {normalizar_para_busqueda_t3(col): col for col in columnas_esperadas_t3}
+    if st.session_state.get("firma_delta_t2") != firma_delta:
+        for k in ["df_delta_cache", "nombre_delta_cache", "ed_vivo_1"]:
+            st.session_state.pop(k, None)
+        st.session_state.firma_delta_t2 = firma_delta
 
-    # ====================================================================
-    # MODO A: COMPLETO (3 ARCHIVOS)
-    # ====================================================================
-    if modo_inyeccion == "📦 Completo (Tengo ARGOS, CSV Final y Excel Original)":
-        st.markdown("Procesa los Excels originales, inyecta los NRCs de ARGOS cruzando con el CSV final y genera un ZIP con los Excels actualizados.")
-        col_a, col_b, col_c = st.columns(3)
-        with col_a: file_argos = st.file_uploader("📊 1. Reporte ARGOS (.csv)", type=["csv"], key="arg_c")
-        with col_b: files_csv_finales = st.file_uploader("📝 2. CSVs Finales", type=["csv"], accept_multiple_files=True, key="csv_c")
-        with col_c: files_xlsx_originales = st.file_uploader("📁 3. Excels Originales", type=["xlsx"], accept_multiple_files=True, key="xls_c")
-            
-        if file_argos and files_csv_finales and files_xlsx_originales:
-            if st.button("🚀 PROCESAR Y GENERAR EXCELS CON NRC", type="primary", key="btn_procesar_argos_completo"):
-                try:
-                    argos_df = pd.read_csv(file_argos, encoding="utf-8", on_bad_lines='skip', dtype=str)
-                    argos_df.columns = [re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) for c in argos_df.columns]
-                    
-                    col_argos_cluster = next((c for c in argos_df.columns if "cluster" in normalizar_para_busqueda_t3(c)), None)
-                    col_argos_area = next((c for c in argos_df.columns if "area" in normalizar_para_busqueda_t3(c)), None)
-                    col_argos_curso = next((c for c in argos_df.columns if "curso" in normalizar_para_busqueda_t3(c)), None)
+    if file_base_ext and file_err_ext:
+        if st.button("🔍 Cargar y Procesar Reporte de Errores", key="procesar_delta_t2", use_container_width=True):
+            try:
+                df_base = leer_csv_banner(file_base_ext)
+                indices = leer_errores_banner(file_err_ext, len(df_base))
+                df_delta = df_base.iloc[indices].copy().reset_index(drop=True)
 
-                    if not col_argos_cluster: raise KeyError("No se encontró la columna de Cluster en ARGOS.")
-                    if not col_argos_area: raise KeyError("No se encontró la columna de Área en ARGOS.")
-                    if not col_argos_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
+                st.session_state.df_delta_cache = df_delta
+                st.session_state.nombre_delta_cache = f"{nombre_base_t2(file_base_ext.name)}_{sufijo}"
+                st.success(f"Se extrajeron {len(indices)} registros con errores de un total de {len(df_base)}.")
+            except Exception as e:
+                st.session_state.df_delta_cache = None
+                st.error(f"No se pudo extraer el fragmento: {e}")
 
-                    argos_df["Periodo"] = argos_df["Periodo"].apply(ultra_limpiar)
-                    argos_df["Nivel"] = argos_df["Nivel"].apply(ultra_limpiar)
-                    argos_df[col_argos_cluster] = argos_df[col_argos_cluster].apply(ultra_limpiar)
-                    argos_df[col_argos_area] = argos_df[col_argos_area].apply(ultra_limpiar)
-                    argos_df[col_argos_curso] = argos_df[col_argos_curso].apply(ultra_limpiar)
-                    argos_df["Grupo"] = argos_df["Grupo"].apply(ultra_limpiar_seccion)
-                    
-                    argos_df["_llave_argos"] = (
-                        argos_df["Periodo"] + "_" + 
-                        argos_df["Nivel"] + "_" + 
-                        argos_df[col_argos_cluster] + "_" + 
-                        argos_df[col_argos_area] + "_" + 
-                        argos_df[col_argos_curso] + "_" + 
-                        argos_df["Grupo"]
-                    )
-                    argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
-                    mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
-                    llaves_argos_disponibles = list(mapa_nrcs.keys())
+    df_delta = st.session_state.get("df_delta_cache")
+    if isinstance(df_delta, pd.DataFrame):
+        st.markdown("#### 📋 Fragmento identificado")
+        modo = st.radio("¿Cómo deseas corregirlo?", ["Excel (.xlsx)", "CSV (.csv)", "Editar en vivo"],
+                        horizontal=True, key="modo_1")
+        nombre_delta = st.session_state.nombre_delta_cache
 
-                    excels_inyectados_zip = io.BytesIO()
-                    archivos_procesados_con_exito = 0
-                    alertas_dimensiones, alertas_parejas = [], []
-                    alertas_nrc_faltantes = []
-                    
-                    with zipfile.ZipFile(excels_inyectados_zip, "w", zipfile.ZIP_DEFLATED) as zip_out:
-                        for fx in files_xlsx_originales:
-                            df_csv, fc_usado = None, None
-                            base_excel = simplificar_nombre(fx.name)
-                            
-                            for fc_cand in files_csv_finales:
-                                base_csv = simplificar_nombre(fc_cand.name)
-                                if base_excel == base_csv or base_excel in base_csv or base_csv in base_excel:
-                                    df_csv = pd.read_csv(io.BytesIO(fc_cand.getvalue()), encoding="utf-8", dtype=str)
-                                    fc_usado = fc_cand
-                                    break
-                            
-                            if df_csv is not None:
-                                wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
-                                if HOJA_ALTAS in wb.sheetnames:
-                                    data = list(wb[HOJA_ALTAS].values)
-                                    if not data: continue
-                                    
-                                    df_excel_original = pd.DataFrame(data[1:], columns=[str(c).strip() if c is not None else "" for c in data[0]])
-                                    
-                                    nuevas_columnas = []
-                                    for col in df_excel_original.columns:
-                                        huella = normalizar_para_busqueda_t3(col)
-                                        if huella in mapa_huellas_t3:
-                                            nuevas_columnas.append(mapa_huellas_t3[huella])
-                                        else:
-                                            nuevas_columnas.append(col)
-                                    df_excel_original.columns = nuevas_columnas
-                                    
-                                    df_excel_original = df_excel_original.dropna(how='all')
-                                    df_csv = df_csv.dropna(how='all')
-                                    
-                                    if "Periodo" in df_excel_original.columns:
-                                        df_excel_original = df_excel_original[df_excel_original["Periodo"].astype(str).str.strip() != ""]
-                                    if "PERIODO" in df_csv.columns:
-                                        df_csv = df_csv[df_csv["PERIODO"].astype(str).str.strip() != ""]
-                                    
-                                    df_excel_original, df_csv = df_excel_original.reset_index(drop=True), df_csv.reset_index(drop=True)
-                                    
-                                    if len(df_excel_original) != len(df_csv):
-                                        alertas_dimensiones.append(f"❌ Excel `{fx.name}` tiene **{len(df_excel_original)} filas**, CSV `{fc_usado.name}` tiene **{len(df_csv)} filas**.")
-                                        continue
-                                    
-                                    df_nrc_pestana = df_excel_original.copy()
-                                    mapeo_columnas = {
-                                        "Periodo": "PERIODO", "Campus": "SEDE", "Subject": "SUBJ", "Course": "COURSE",
-                                        "Parte de Periodo": "PARTEPERIODO", "Estatus": "STATUS", "Capacidad": "CAPACIDAD",
-                                        "Sección": "SECCION", "Tipo de Horario": "TIPODEHORARIO", "Método Educativo": "METODO_EDUCATIVO",
-                                        "Modo de Calificar": "MODODECALIFICAR", "Sesion": "SESION"
-                                    }
-                                    
-                                    for col_ex, col_cs in mapeo_columnas.items():
-                                        if col_ex in df_nrc_pestana.columns and col_cs in df_csv.columns:
-                                            if col_ex == "Sección": df_nrc_pestana[col_ex] = pd.to_numeric(df_csv[col_cs], errors='coerce').values
-                                            else: df_nrc_pestana[col_ex] = df_csv[col_cs].values
-                                    
-                                    df_nrc_pestana["Grupos"], df_nrc_pestana["Socio de Integración"] = "1", "D2L"
-                                    
-                                    cluster_csv_series = df_csv["datocomplementario"] if "datocomplementario" in df_csv.columns else pd.Series([""] * len(df_csv))
-                                    nivel_corregido = cluster_csv_series.apply(corregir_nivel_por_cluster_csv).apply(ultra_limpiar)
-                                    cluster_limpio_csv = cluster_csv_series.apply(ultra_limpiar)
-                                    
-                                    llaves_cruce = (
-                                        df_nrc_pestana["Periodo"].apply(ultra_limpiar) + "_" + 
-                                        nivel_corregido + "_" + 
-                                        cluster_limpio_csv + "_" + 
-                                        df_nrc_pestana["Subject"].apply(ultra_limpiar) + "_" + 
-                                        df_nrc_pestana["Course"].apply(ultra_limpiar) + "_" + 
-                                        df_nrc_pestana["Sección"].apply(ultra_limpiar_seccion)
-                                    )
-                                    
-                                    nrc_mapeados = llaves_cruce.map(mapa_nrcs)
-                                    
-                                    faltantes = llaves_cruce[nrc_mapeados.isna()]
-                                    if not faltantes.empty:
-                                        for llave_rota in faltantes.unique():
-                                            sugerencias = difflib.get_close_matches(str(llave_rota), llaves_argos_disponibles, n=1, cutoff=0.5)
-                                            sugerencia_txt = f"👉 En ARGOS lo más parecido es: **{sugerencias[0]}**" if sugerencias else "👉 (No se encontró nada parecido en ARGOS)"
-                                            alertas_nrc_faltantes.append(f"❌ `{fx.name}` buscó: **{llave_rota}** \n{sugerencia_txt}")
+        if modo == "Excel (.xlsx)":
+            buffer = io.BytesIO()
+            df_delta.to_excel(buffer, index=False, engine="openpyxl")
+            st.download_button("📥 Descargar fragmento Excel", buffer.getvalue(),
+                               file_name=f"{nombre_delta}.xlsx", use_container_width=True)
 
-                                    df_nrc_pestana.insert(0, "NRC", nrc_mapeados)
-                                    
-                                    if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
-                                    ws_nrc = wb.create_sheet(title=HOJA_SALIDA_NRC)
-                                    ws_nrc.append(list(df_nrc_pestana.columns))
-                                    for fila in df_nrc_pestana.values: ws_nrc.append([None if pd.isna(v) else v for v in fila])
-                                    
-                                    font_base, font_nrc, font_header = Font(name="Calibri", size=11), Font(name="Calibri", size=11, bold=True), Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-                                    fill_header, fill_nrc = PatternFill(start_color="1F4E78", fill_type="solid"), PatternFill(start_color="DDEBF7", fill_type="solid")
-                                    align_header, align_center = Alignment(horizontal="center", vertical="center", wrap_text=True), Alignment(horizontal="center", vertical="center")
-                                    
-                                    for row in ws_nrc.iter_rows(min_row=1, max_row=ws_nrc.max_row, min_col=1, max_col=ws_nrc.max_column):
-                                        for cell in row: cell.font = font_base
-                                    for cell in ws_nrc[1]: cell.font, cell.fill, cell.alignment = font_header, fill_header, align_header
-                                    for cell in ws_nrc['A'][1:]: cell.font, cell.fill, cell.alignment = font_nrc, fill_nrc, align_center
-                                    
-                                    for col in ws_nrc.columns:
-                                        max_len = 0
-                                        for cell in col:
-                                            if cell.value: max_len = max(max_len, len(str(cell.value)))
-                                        ws_nrc.column_dimensions[col[0].column_letter].width = max(max_len + 3, 11)
-                                    
-                                    nombre_salida_excel = fc_usado.name.rsplit('.', 1)[0] + "_con_NRC.xlsx"
-                                    excel_buffer = io.BytesIO()
-                                    wb.save(excel_buffer)
-                                    zip_out.writestr(nombre_salida_excel, excel_buffer.getvalue())
-                                    archivos_procesados_con_exito += 1
-                                    
-                            else:
-                                alertas_parejas.append(f"⚠️ `{fx.name}` no encontró ningún CSV compatible.")
+        elif modo == "CSV (.csv)":
+            st.download_button("📥 Descargar fragmento CSV",
+                               df_delta.to_csv(**CSV_KWARGS_R).encode("utf-8"),
+                               file_name=f"{nombre_delta}.csv", use_container_width=True)
 
-                    if archivos_procesados_con_exito > 0:
-                        st.session_state.final_argos_zip = excels_inyectados_zip.getvalue()
-                        st.success(f"🎉 ¡Proceso finalizado! Se procesaron {archivos_procesados_con_exito} archivos exitosamente.")
-                    else: 
-                        st.error("❌ No se pudo procesar ningún archivo.")
-                    
-                    if alertas_nrc_faltantes:
-                        st.markdown("### 🔍 Radar de Llaves Rotas (Comparación Frente a Frente):")
-                        for alerta in alertas_nrc_faltantes: st.error(alerta)
-                            
-                    if alertas_dimensiones:
-                        st.markdown("### 🚫 Archivos descartados por diferencia de filas:")
-                        for alerta in alertas_dimensiones: st.error(alerta)
-                    if alertas_parejas:
-                        st.markdown("### ❓ Archivos sin pareja:")
-                        for alerta in alertas_parejas: st.warning(alerta)
+        else:
+            st.caption("Modifica las celdas y descarga el fragmento corregido.")
+            df_editado = st.data_editor(df_delta, hide_index=True, use_container_width=True,
+                                        num_rows="fixed", key="ed_vivo_1")
+            st.download_button("📥 Descargar parche corregido",
+                               df_editado.to_csv(**CSV_KWARGS_R).encode("utf-8"),
+                               file_name=f"{nombre_delta}.csv", use_container_width=True)
 
-                except Exception as e:
-                    st.error(f"❌ Ocurrió un inconveniente crítico: {str(e)}")
+    # ========================================================
+    # 4. INYECTAR CORRECCIONES Y GENERAR CSV FINAL
+    # ========================================================
+    st.divider()
+    st.subheader("💉 2. Inyectar correcciones y generar archivo final")
 
-        if st.session_state.final_argos_zip is not None:
-            st.markdown("### 📥 Panel de Descarga (Excels Inyectados)")
-            st.download_button(
-                label="📁 📥 DESCARGAR EXCELS CON NRC (.ZIP)", data=st.session_state.final_argos_zip,
-                file_name="Excels_Finales_con_NRC.zip", mime="application/zip",
-                use_container_width=True, type="primary",
-                key="dl_excels_nrc_zip"
-            )
+    c1, c2, c3 = st.columns(3)
+    file_base_iny = c1.file_uploader("📁 Archivo Base (.csv)", type=["csv"], key="iny_base_2")
+    file_err_iny = c2.file_uploader("📊 Reporte de Errores (.xlsx)", type=["xlsx"], key="iny_err_2")
+    file_corr_iny = c3.file_uploader("📝 Fragmento Corregido", type=["csv", "xlsx"], key="iny_corr_2")
+    etiqueta = st.text_input("Etiqueta del archivo final", value="final", key="suf_v2")
 
-    # ====================================================================
-    # MODO B: RÁPIDO (SOLO CSV FINAL + ARGOS)
-    # ====================================================================
-    elif modo_inyeccion == "⚡ Rápido (Tengo ARGOS y CSV Final)":
-        st.markdown("Extrae los NRC de ARGOS cruzando con el CSV final y genera una tabla limpia que puedes copiar o descargar en Excel.")
-        
-        col_r1, col_r2 = st.columns(2)
-        with col_r1: file_argos_rap = st.file_uploader("📊 1. Reporte ARGOS (.csv)", type=["csv"], key="arg_r")
-        with col_r2: files_csv_rap = st.file_uploader("📝 2. CSVs Finales", type=["csv"], accept_multiple_files=True, key="csv_r")
-        
-        if file_argos_rap and files_csv_rap:
-            if st.button("⚡ Cruzar NRC y Generar Tabla", type="primary", key="btn_cruzar_rapido"):
-                try:
-                    argos_df = pd.read_csv(file_argos_rap, encoding="utf-8", on_bad_lines='skip', dtype=str)
-                    argos_df.columns = [re.sub(r'\.+', '.', str(c).replace('"', '').replace("'", "").strip()) for c in argos_df.columns]
-                    
-                    col_argos_cluster = next((c for c in argos_df.columns if "cluster" in normalizar_para_busqueda_t3(c)), None)
-                    col_argos_area = next((c for c in argos_df.columns if "area" in normalizar_para_busqueda_t3(c)), None)
-                    col_argos_curso = next((c for c in argos_df.columns if "curso" in normalizar_para_busqueda_t3(c)), None)
+    firma_final = (
+        tuple((f.name, f.getvalue()) for f in [file_base_iny, file_err_iny, file_corr_iny])
+        if all([file_base_iny, file_err_iny, file_corr_iny]) else None
+    )
 
-                    if not col_argos_cluster: raise KeyError("No se encontró la columna de Cluster en ARGOS.")
-                    if not col_argos_area: raise KeyError("No se encontró la columna de Área en ARGOS.")
-                    if not col_argos_curso: raise KeyError("No se encontró la columna de Curso en ARGOS.")
+    if st.session_state.get("firma_final_t2") != (firma_final, etiqueta):
+        st.session_state.archivo_final_bytes = None
+        st.session_state.archivo_final_nombre = None
+        st.session_state.firma_final_t2 = (firma_final, etiqueta)
 
-                    argos_df["Periodo"] = argos_df["Periodo"].apply(ultra_limpiar)
-                    argos_df["Nivel"] = argos_df["Nivel"].apply(ultra_limpiar)
-                    argos_df[col_argos_cluster] = argos_df[col_argos_cluster].apply(ultra_limpiar)
-                    argos_df[col_argos_area] = argos_df[col_argos_area].apply(ultra_limpiar)
-                    argos_df[col_argos_curso] = argos_df[col_argos_curso].apply(ultra_limpiar)
-                    argos_df["Grupo"] = argos_df["Grupo"].apply(ultra_limpiar_seccion)
-                    
-                    argos_df["_llave_argos"] = (
-                        argos_df["Periodo"] + "_" + 
-                        argos_df["Nivel"] + "_" + 
-                        argos_df[col_argos_cluster] + "_" + 
-                        argos_df[col_argos_area] + "_" + 
-                        argos_df[col_argos_curso] + "_" + 
-                        argos_df["Grupo"]
-                    )
-                    argos_df = argos_df.drop_duplicates(subset=["_llave_argos"])
-                    mapa_nrcs = dict(zip(argos_df["_llave_argos"], argos_df["NRC"]))
-                    llaves_argos_disponibles = list(mapa_nrcs.keys())
-                    
-                    dfs_combinados = []
-                    alertas_nrc_rapido = []
-                    
-                    for fc in files_csv_rap:
-                        df_c = pd.read_csv(io.BytesIO(fc.getvalue()), encoding="utf-8", dtype=str)
-                        df_c = df_c.dropna(how='all')
-                        
-                        cluster_csv_series = df_c["datocomplementario"] if "datocomplementario" in df_c.columns else pd.Series([""] * len(df_c))
-                        nivel_csv = cluster_csv_series.apply(corregir_nivel_por_cluster_csv).apply(ultra_limpiar)
-                        cluster_limpio_csv = cluster_csv_series.apply(ultra_limpiar)
-                        
-                        llaves_csv = (
-                            df_c.get("PERIODO", pd.Series(dtype=str)).apply(ultra_limpiar) + "_" + 
-                            nivel_csv + "_" + 
-                            cluster_limpio_csv + "_" + 
-                            df_c.get("SUBJ", pd.Series(dtype=str)).apply(ultra_limpiar) + "_" + 
-                            df_c.get("COURSE", pd.Series(dtype=str)).apply(ultra_limpiar) + "_" + 
-                            df_c.get("SECCION", pd.Series(dtype=str)).apply(ultra_limpiar_seccion)
-                        )
-                        
-                        nrc_asignados = llaves_csv.map(mapa_nrcs)
-                        
-                        faltantes = llaves_csv[nrc_asignados.isna()]
-                        if not faltantes.empty:
-                            for llave_rota in faltantes.unique():
-                                sugerencias = difflib.get_close_matches(str(llave_rota), llaves_argos_disponibles, n=1, cutoff=0.5)
-                                sugerencia_txt = f"👉 En ARGOS lo más parecido es: **{sugerencias[0]}**" if sugerencias else "👉 (No se encontró nada parecido)"
-                                alertas_nrc_rapido.append(f"❌ Buscó: **{llave_rota}** \n{sugerencia_txt}")
-                            
-                        df_c.insert(0, "NRC", nrc_asignados)
-                        
-                        df_c = df_c.rename(columns={
-                            "TIPODEHORARIO": "TIPO DE HORARIO",
-                            "METODO_EDUCATIVO": "METODO_ED"
-                        })
-                        
-                        columnas_deseadas = ["NRC", "PERIODO", "SUBJ", "COURSE", "CAPACIDAD", "SECCION", "TIPO DE HORARIO", "METODO_ED", "datocomplementario"]
-                        columnas_finales = [c for c in columnas_deseadas if c in df_c.columns]
-                        
-                        dfs_combinados.append(df_c[columnas_finales])
-                        
-                    if dfs_combinados:
-                        df_resultado_rapido = pd.concat(dfs_combinados, ignore_index=True)
-                        
-                        # Guardamos el resultado completo
-                        st.session_state.df_cruce_rapido = df_resultado_rapido
-                        # Al generar un cruce nuevo, reseteamos la selección de columnas
-                        st.session_state.pop("columnas_copia_rapida", None)
-                        
-                        st.success("✅ ¡Tabla cruzada generada exitosamente!")
-                        
-                        if alertas_nrc_rapido:
-                            st.warning("⚠️ Ojo: Algunas filas no encontraron su NRC. Revisa las discrepancias abajo:")
-                            with st.expander("🔍 Ver llaves que no cruzaron (Frente a Frente)"):
-                                for a in alertas_nrc_rapido: st.write(a)
-                    else:
-                        st.error("No se pudo procesar la información de los CSV.")
-                        
-                except Exception as e:
-                    st.error(f"❌ Ocurrió un error en el cruce rápido: {str(e)}")
+    if all([file_base_iny, file_err_iny, file_corr_iny]):
+        if st.button("🚀 Ensamblar Archivo Final", type="primary",
+                     key="ensamblar_t2", use_container_width=True):
+            try:
+                base = leer_csv_banner(file_base_iny)
+                indices = leer_errores_banner(file_err_iny, len(base))
 
-        # ============================================================
-        # RESULTADOS PARA COPIAR O DESCARGAR
-        # ============================================================
-        if st.session_state.df_cruce_rapido is not None:
-            st.markdown("### 📋 Resultados del Cruce (NRC inyectados)")
+                if file_corr_iny.name.lower().endswith(".xlsx"):
+                    corregidas = pd.read_excel(io.BytesIO(file_corr_iny.getvalue()), dtype=str,
+                                               keep_default_na=False)
+                else:
+                    corregidas = leer_csv_banner(file_corr_iny)
 
-            # Cambiamos solamente el nombre que VE el usuario.
-            df_resultado_mostrar = st.session_state.df_cruce_rapido.rename(
-                columns={"datocomplementario": "Cluster"}
-            ).copy()
+                corregidas = corregidas.fillna("").reset_index(drop=True)
 
-            # --------------------------------------------------------
-            # SELECCIÓN DE COLUMNAS PARA COPIAR O DESCARGAR
-            # --------------------------------------------------------
-            columnas_seleccionadas = st.multiselect(
-                "✅ Selecciona las columnas que quieres copiar o descargar:",
-                options=list(df_resultado_mostrar.columns),
-                default=list(df_resultado_mostrar.columns),
-                key="columnas_copia_rapida",
-                help="Puedes dejar todas o quitar las que no necesites."
-            )
+                if len(indices) != len(corregidas):
+                    raise ValueError(f"El reporte tiene {len(indices)} registros con error, pero el parche "
+                                     f"contiene {len(corregidas)}. Deben coincidir exactamente.")
 
-            if columnas_seleccionadas:
-                df_para_copiar = df_resultado_mostrar[columnas_seleccionadas].copy()
+                faltantes = set(base.columns) - set(corregidas.columns)
+                extras = set(corregidas.columns) - set(base.columns)
+                if faltantes or extras:
+                    raise ValueError(f"Columnas diferentes. Faltantes: {sorted(faltantes)}. "
+                                     f"Adicionales: {sorted(extras)}.")
 
-                st.dataframe(
-                    df_para_copiar,
-                    use_container_width=True,
-                    hide_index=True
-                )
+                if corregidas.columns.duplicated().any():
+                    raise ValueError("El fragmento corregido contiene columnas duplicadas.")
 
-                col_b1, col_b2 = st.columns(2)
+                final = base.copy()
+                final.iloc[indices, :] = corregidas[base.columns].to_numpy()
 
-                # ----------------------------------------------------
-                # COPIAR Y PEGAR DIRECTO EN EXCEL
-                # ----------------------------------------------------
-                with col_b1:
-                    st.markdown("#### 📝 Copiar y pegar en Excel")
-                    st.info(
-                        "Haz clic en el botón de **Copiar** de la esquina "
-                        "superior derecha del cuadro y después pégalo en Excel."
-                    )
-                    tsv_rapido = df_para_copiar.to_csv(index=False, sep="\t")
-                    st.code(tsv_rapido, language="text")
+                if len(final) != len(base):
+                    raise ValueError("El archivo final no conserva la cantidad de registros originales.")
 
-                # ----------------------------------------------------
-                # DESCARGAR EXCEL CON FORMATO Y COLORES
-                # ----------------------------------------------------
-                with col_b2:
-                    st.markdown("#### 📥 Descargar en Excel")
-                    st.info(
-                        "El archivo descargado tendrá las columnas seleccionadas y formato visual listo."
-                    )
+                nombre_final = f"{nombre_base_t2(file_base_iny.name)}_{etiqueta}.csv"
+                st.session_state.archivo_final_bytes = final.to_csv(**CSV_KWARGS_R).encode("utf-8")
+                st.session_state.archivo_final_nombre = nombre_final
+                st.success(f"Archivo ensamblado: {len(indices)} registros corregidos, {len(final)} filas totales.")
 
-                    # --- Aplicando openpyxl para darle formato a la descarga rápida ---
-                    excel_rapido_buffer = io.BytesIO()
-                    
-                    with pd.ExcelWriter(excel_rapido_buffer, engine='openpyxl') as writer:
-                        df_para_copiar.to_excel(writer, index=False, sheet_name="Cruce_NRC")
-                        worksheet = writer.sheets["Cruce_NRC"]
-                        
-                        # Estilos de openpyxl
-                        font_base = Font(name="Calibri", size=11)
-                        font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-                        fill_header = PatternFill(start_color="1F4E78", fill_type="solid")
-                        align_header = Alignment(horizontal="center", vertical="center", wrap_text=True)
-                        align_center = Alignment(horizontal="center", vertical="center")
-                        
-                        font_nrc = Font(name="Calibri", size=11, bold=True)
-                        fill_nrc = PatternFill(start_color="DDEBF7", fill_type="solid")
+            except Exception as e:
+                st.session_state.archivo_final_bytes = None
+                st.error(f"Error al ensamblar: {e}")
 
-                        # Colorear la Cabecera
-                        for cell in worksheet[1]:
-                            cell.font = font_header
-                            cell.fill = fill_header
-                            cell.alignment = align_header
-                            
-                        # Ajustar el ancho de las columnas
-                        for col in worksheet.columns:
-                            max_len = 0
-                            for cell in col:
-                                if cell.value:
-                                    max_len = max(max_len, len(str(cell.value)))
-                            worksheet.column_dimensions[col[0].column_letter].width = max(max_len + 3, 11)
+    # 5. DESCARGA FINAL
+    if st.session_state.get("archivo_final_bytes") is not None:
+        st.download_button(f"📥 DESCARGAR {st.session_state.archivo_final_nombre}",
+                           data=st.session_state.archivo_final_bytes,
+                           file_name=st.session_state.archivo_final_nombre,
+                           mime="text/csv", type="primary", use_container_width=True,
+                           key="descargar_final_t2")
 
-                        # Detectar si se incluyó la columna NRC para resaltarla
-                        nrc_col_idx = None
-                        if "NRC" in df_para_copiar.columns:
-                            nrc_col_idx = list(df_para_copiar.columns).index("NRC") + 1
+# ============================================================
+# FIN DE PESTAÑA 2
+# ============================================================
 
-                        # Aplicar fuente base, centrado y color al NRC
-                        for row in worksheet.iter_rows(min_row=2, max_row=worksheet.max_row, min_col=1, max_col=worksheet.max_column):
-                            for cell in row:
-                                if nrc_col_idx and cell.column == nrc_col_idx:
-                                    cell.font = font_nrc
-                                    cell.fill = fill_nrc
-                                else:
-                                    cell.font = font_base
-                                cell.alignment = align_center
 
-                    excel_rapido_buffer.seek(0) # Rebobinamos el buffer para que Streamlit lo pueda leer
+# ============================================================
+# PESTAÑA 3: INYECCIÓN DE NRCs Y CRUCES CON ARGOS
+# ============================================================
 
-                    st.download_button(
-                        label="📥 Descargar tabla formateada (.xlsx)",
-                        data=excel_rapido_buffer.getvalue(),
-                        file_name="Cruce_Rapido_NRC.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary",
-                        use_container_width=True,
-                        key="dl_cruce_rapido_xlsx"
-                    )
+with tab3:
+    st.header("📊 Inyección de NRCs y Cruces con ARGOS")
 
+    # 1. REINICIAR PESTAÑA
+    col_tit, col_btn = st.columns([4, 1])
+    with col_btn:
+        if st.button("🔄 Limpiar / Recomenzar", key="limpiar_t3", use_container_width=True):
+            claves = ["modo_inyeccion_t3", "arg_c", "csv_c", "xls_c", "arg_r", "csv_r",
+                      "final_argos_zip", "df_cruce_rapido", "columnas_copia_rapida",
+                      "alertas_argos_t3", "firma_argos_t3", "firma_rapido_t3"]
+            for k in claves: st.session_state.pop(k, None)
+            st.rerun()
+
+    modo = st.radio("🛠️ Selecciona el tipo de proceso:", [
+        "📦 Completo (ARGOS + CSV Final + Excel Original)",
+        "⚡ Rápido (ARGOS + CSV Final)"
+    ], horizontal=True, key="modo_inyeccion_t3")
+
+    st.divider()
+
+    # ========================================================
+    # 2. FUNCIONES AUXILIARES
+    # ========================================================
+
+    def leer_argos(archivo):
+        df = pd.read_csv(io.BytesIO(archivo.getvalue()), dtype=str, encoding="utf-8-sig",
+                         keep_default_na=False, on_bad_lines="skip")
+        df.columns = [re.sub(r"\.+", ".", str(c).replace('"', "").replace("'", "").strip())
+                      for c in df.columns]
+
+        def buscar_columna(palabra):
+            return next((c for c in df.columns if palabra in normalizar_para_busqueda_t3(c)), None)
+
+        columnas = {
+            "periodo": buscar_columna("periodo"),
+            "nivel": buscar_columna("nivel"),
+            "cluster": buscar_columna("cluster"),
+            "subj": buscar_columna("area"),
+            "crse": buscar_columna("curso"),
+            "grupo": buscar_columna("grupo"),
+            "nrc": buscar_columna("nrc")
+        }
+
+        faltantes = [k for k, v in columnas.items() if v is None]
+        if faltantes: raise ValueError(f"ARGOS: no se encontraron columnas {faltantes}")
+
+        # Identificar columna Grupo exacta, evitando Grupo LC
+        grupo_exacto = next((c for c in df.columns if normalizar_para_busqueda_t3(c) == "grupo"), None)
+        if grupo_exacto: columnas["grupo"] = grupo_exacto
+
+        for nombre, columna in columnas.items():
+            if nombre == "grupo":
+                df["_grupo"] = df[columna].apply(ultra_limpiar_seccion)
             else:
-                st.warning(
-                    "⚠️ Selecciona por lo menos una columna para poder copiar o descargar.")
+                df[f"_{nombre}"] = df[columna].apply(ultra_limpiar)
+
+        df["_llave"] = (
+            df["_periodo"] + "_" + df["_nivel"] + "_" + df["_cluster"] + "_" +
+            df["_subj"] + "_" + df["_crse"] + "_" + df["_grupo"]
+        )
+
+        # Evitar que NRC vacíos o claves repetidas generen cruces incorrectos
+        df = df[df["_nrc"].ne("") & df["_periodo"].ne("") & df["_subj"].ne("") &
+                df["_crse"].ne("") & df["_grupo"].ne("")].copy()
+
+        conflictos = df.groupby("_llave")["_nrc"].nunique()
+        conflictos = conflictos[conflictos > 1].index.tolist()
+
+        if conflictos:
+            raise ValueError(
+                f"ARGOS contiene {len(conflictos)} combinaciones con NRC diferentes. "
+                f"Ejemplos: {conflictos[:5]}. Revisa antes de inyectar."
+            )
+
+        df = df.drop_duplicates(subset=["_llave"])
+        mapa = dict(zip(df["_llave"], df[columnas["nrc"]]))
+        return df, mapa
+
+    def nivel_desde_cluster(cluster):
+        c = normalizar_para_cruce(cluster)
+        if "POSGRADO" in c: return "POSGRADO"
+        if "BACHILLERATO" in c: return "BACHILLERATO"
+        return "LICENCIATURA"
+
+    def generar_llaves_csv(df):
+        obligatorias = ["PERIODO", "SUBJ", "COURSE", "SECCION", "datocomplementario"]
+        faltantes = [c for c in obligatorias if c not in df.columns]
+        if faltantes: raise ValueError(f"CSV Final: faltan columnas {faltantes}")
+
+        cluster = df["datocomplementario"].apply(ultra_limpiar)
+        nivel = df["datocomplementario"].apply(nivel_desde_cluster)
+
+        return (
+            df["PERIODO"].apply(ultra_limpiar) + "_" + nivel + "_" + cluster + "_" +
+            df["SUBJ"].apply(ultra_limpiar) + "_" + df["COURSE"].apply(ultra_limpiar) + "_" +
+            df["SECCION"].apply(ultra_limpiar_seccion)
+        )
+
+    def buscar_nrc(df_csv, mapa, llaves_argos):
+        llaves = generar_llaves_csv(df_csv)
+        nrc = llaves.map(mapa)
+        alertas = []
+
+        for llave in llaves[nrc.isna()].unique():
+            parecidas = difflib.get_close_matches(str(llave), llaves_argos, n=1, cutoff=0.5)
+            sugerencia = parecidas[0] if parecidas else "Sin coincidencia cercana"
+            alertas.append({"Llave sin NRC": llave, "Coincidencia ARGOS": sugerencia})
+
+        return nrc, alertas
+
+    def formato_excel_nrc(ws, columna_nrc="NRC"):
+        fuente = Font(name="Calibri", size=11)
+        fuente_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        fondo_header = PatternFill(start_color="1F4E78", fill_type="solid")
+        fondo_nrc = PatternFill(start_color="DDEBF7", fill_type="solid")
+        centro = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        encabezados = {str(c.value): c.column for c in ws[1]}
+        idx_nrc = encabezados.get(columna_nrc)
+
+        for celda in ws[1]:
+            celda.font, celda.fill, celda.alignment = fuente_header, fondo_header, centro
+
+        for fila in ws.iter_rows(min_row=2):
+            for celda in fila:
+                celda.font = fuente
+                celda.alignment = Alignment(horizontal="center", vertical="center")
+                if idx_nrc and celda.column == idx_nrc:
+                    celda.font = Font(name="Calibri", size=11, bold=True)
+                    celda.fill = fondo_nrc
+
+        for columna in ws.columns:
+            ancho = max((len(str(c.value)) for c in columna if c.value is not None), default=8)
+            ws.column_dimensions[columna[0].column_letter].width = min(max(ancho + 3, 11), 45)
+
+    def leer_csv_final(archivo):
+        return pd.read_csv(io.BytesIO(archivo.getvalue()), dtype=str, encoding="utf-8-sig",
+                           keep_default_na=False).dropna(how="all").reset_index(drop=True)
+
+    # ========================================================
+    # 3. MODO COMPLETO: ARGOS + CSV + EXCEL ORIGINAL
+    # ========================================================
+
+    if modo.startswith("📦"):
+        st.subheader("📦 Inyección masiva de NRC en Excel")
+        c1, c2, c3 = st.columns(3)
+        file_argos = c1.file_uploader("📊 Reporte ARGOS (.csv)", type=["csv"], key="arg_c")
+        files_csv = c2.file_uploader("📝 CSV Finales", type=["csv"], accept_multiple_files=True, key="csv_c")
+        files_excel = c3.file_uploader("📁 Excel Originales", type=["xlsx"], accept_multiple_files=True, key="xls_c")
+
+        if file_argos and files_csv and files_excel:
+            if st.button("🚀 PROCESAR Y GENERAR EXCELS CON NRC", type="primary",
+                         use_container_width=True, key="procesar_argos_completo"):
+                try:
+                    argos, mapa = leer_argos(file_argos)
+                    llaves_argos = list(mapa.keys())
+                    buffer_zip = io.BytesIO()
+                    alertas, procesados = [], 0
+                    csv_usados = set()
+
+                    with zipfile.ZipFile(buffer_zip, "w", zipfile.ZIP_DEFLATED) as z:
+                        for fx in files_excel:
+                            nombre_excel = simplificar_nombre(fx.name)
+                            parejas = [fc for fc in files_csv if
+                                       simplificar_nombre(fc.name) == nombre_excel]
+
+                            if len(parejas) != 1:
+                                alertas.append(f"{fx.name}: se encontraron {len(parejas)} CSV compatibles.")
+                                continue
+
+                            fc = parejas[0]
+                            if fc.name in csv_usados:
+                                alertas.append(f"{fx.name}: el CSV {fc.name} ya fue utilizado.")
+                                continue
+
+                            df_csv = leer_csv_final(fc)
+                            wb = openpyxl.load_workbook(io.BytesIO(fx.getvalue()))
+
+                            hoja = next((h for h in wb.sheetnames if h.strip().upper() == HOJA_ALTAS), None)
+                            if hoja is None:
+                                alertas.append(f"{fx.name}: no tiene pestaña ALTAS.")
+                                continue
+
+                            df_excel = pd.read_excel(io.BytesIO(fx.getvalue()), sheet_name=hoja, dtype=str)
+                            df_excel = df_excel.dropna(how="all").reset_index(drop=True)
+                            df_excel.columns = [str(c).strip() for c in df_excel.columns]
+
+                            if len(df_excel) != len(df_csv):
+                                alertas.append(f"{fx.name}: Excel {len(df_excel)} filas vs CSV {len(df_csv)} filas.")
+                                continue
+
+                            nrc, faltantes = buscar_nrc(df_csv, mapa, llaves_argos)
+                            for f in faltantes:
+                                alertas.append(f"{fx.name}: {f['Llave sin NRC']} → {f['Coincidencia ARGOS']}")
+
+                            # Se conserva el Excel original y se agrega una nueva hoja NRC
+                            df_nrc = df_excel.copy()
+                            equivalencias = {
+                                "Periodo": "PERIODO", "Campus": "SEDE", "Subject": "SUBJ",
+                                "Course": "COURSE", "Parte de Periodo": "PARTEPERIODO",
+                                "Estatus": "STATUS", "Capacidad": "CAPACIDAD", "Sección": "SECCION",
+                                "Tipo de Horario": "TIPODEHORARIO", "Método Educativo": "METODO_EDUCATIVO",
+                                "Modo de Calificar": "MODODECALIFICAR", "Sesion": "SESION"
+                            }
+                            for origen, destino in equivalencias.items():
+                                if origen in df_nrc.columns and destino in df_csv.columns:
+                                    df_nrc[origen] = df_csv[destino].values
+
+                            df_nrc.insert(0, "NRC", nrc.values)
+                            df_nrc["Grupos"] = "1"
+                            df_nrc["Socio de Integración"] = "D2L"
+
+                            if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
+                            ws = wb.create_sheet(HOJA_SALIDA_NRC)
+                            ws.append(list(df_nrc.columns))
+
+                            for fila in df_nrc.itertuples(index=False, name=None):
+                                ws.append([None if pd.isna(v) else v for v in fila])
+
+                            formato_excel_nrc(ws)
+                            salida = io.BytesIO()
+                            wb.save(salida)
+
+                            nombre_salida = fc.name.rsplit(".", 1)[0] + "_con_NRC.xlsx"
+                            z.writestr(nombre_salida, salida.getvalue())
+                            csv_usados.add(fc.name)
+                            procesados += 1
+
+                    st.session_state.final_argos_zip = buffer_zip.getvalue() if procesados else None
+                    st.session_state.alertas_argos_t3 = alertas
+
+                    if procesados: st.success(f"Se procesaron {procesados} Excel correctamente.")
+                    else: st.error("No se pudo procesar ningún archivo.")
+
+                except Exception as e:
+                    st.session_state.final_argos_zip = None
+                    st.error(f"Error en la inyección de NRC: {e}")
+
+        if st.session_state.get("alertas_argos_t3"):
+            with st.expander("🔍 Ver discrepancias y NRC no encontrados"):
+                for alerta in st.session_state.alertas_argos_t3: st.warning(alerta)
+
+        if st.session_state.get("final_argos_zip"):
+            st.download_button("📥 DESCARGAR EXCELS CON NRC (.ZIP)",
+                               st.session_state.final_argos_zip, file_name="Excels_Finales_con_NRC.zip",
+                               mime="application/zip", type="primary", use_container_width=True)
+
+    # ========================================================
+    # 4. MODO RÁPIDO: ARGOS + CSV FINAL
+    # ========================================================
+
+    else:
+        st.subheader("⚡ Cruce rápido de NRC")
+        c1, c2 = st.columns(2)
+        file_argos = c1.file_uploader("📊 Reporte ARGOS (.csv)", type=["csv"], key="arg_r")
+        files_csv = c2.file_uploader("📝 CSV Finales", type=["csv"], accept_multiple_files=True, key="csv_r")
+
+        if file_argos and files_csv:
+            if st.button("⚡ Cruzar NRC y Generar Tabla", type="primary",
+                         use_container_width=True, key="procesar_argos_rapido"):
+                try:
+                    argos, mapa = leer_argos(file_argos)
+                    resultados, alertas = [], []
+
+                    for archivo in files_csv:
+                        df = leer_csv_final(archivo)
+                        nrc, faltantes = buscar_nrc(df, mapa, list(mapa.keys()))
+                        df.insert(0, "NRC", nrc.values)
+                        df = df.rename(columns={
+                            "TIPODEHORARIO": "TIPO DE HORARIO",
+                            "METODO_EDUCATIVO": "METODO_ED",
+                            "datocomplementario": "Cluster"
+                        })
+
+                        columnas = ["NRC", "PERIODO", "SUBJ", "COURSE", "CAPACIDAD",
+                                    "SECCION", "TIPO DE HORARIO", "METODO_ED", "Cluster"]
+                        resultados.append(df[[c for c in columnas if c in df.columns]])
+                        alertas += [{"Archivo": archivo.name, **f} for f in faltantes]
+
+                    st.session_state.df_cruce_rapido = pd.concat(resultados, ignore_index=True)
+                    st.session_state.alertas_argos_t3 = alertas
+                    st.session_state.pop("columnas_copia_rapida", None)
+                    st.success(f"Cruce completado: {len(st.session_state.df_cruce_rapido)} registros.")
+
+                except Exception as e:
+                    st.session_state.df_cruce_rapido = None
+                    st.error(f"Error en cruce rápido: {e}")
+
+        if st.session_state.get("alertas_argos_t3"):
+            with st.expander("⚠️ NRC no encontrados"):
+                st.dataframe(pd.DataFrame(st.session_state.alertas_argos_t3),
+                             hide_index=True, use_container_width=True)
+
+        df_resultado = st.session_state.get("df_cruce_rapido")
+        if isinstance(df_resultado, pd.DataFrame):
+            st.subheader("📋 Resultados del cruce")
+
+            columnas = st.multiselect("Selecciona columnas para copiar o descargar",
+                                      options=list(df_resultado.columns),
+                                      default=list(df_resultado.columns),
+                                      key="columnas_copia_rapida")
+
+            if columnas:
+                df_mostrar = df_resultado[columnas].copy()
+                st.dataframe(df_mostrar, hide_index=True, use_container_width=True)
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("#### 📋 Copiar a Excel")
+                    st.caption("Copia el contenido del cuadro y pégalo directamente en Excel.")
+                    st.code(df_mostrar.to_csv(index=False, sep="\t"), language="text")
+
+                with c2:
+                    st.markdown("#### 📥 Descargar Excel")
+                    buffer = io.BytesIO()
+                    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                        df_mostrar.to_excel(writer, index=False, sheet_name="Cruce_NRC")
+                        formato_excel_nrc(writer.sheets["Cruce_NRC"])
+
+                    st.download_button("📥 Descargar tabla formateada (.xlsx)",
+                                       buffer.getvalue(), file_name="Cruce_Rapido_NRC.xlsx",
+                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                       type="primary", use_container_width=True)
+            else:
+                st.warning("Selecciona al menos una columna.")
+
+# ============================================================
+# FIN DE PESTAÑA 3
+# ============================================================
