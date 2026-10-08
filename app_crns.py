@@ -106,33 +106,60 @@ def cluster_oficial(x):
     return next((c for c in CLUSTERS_PERMITIDOS
                  if normalizar_para_busqueda(c) == normalizar_para_busqueda(original)), original)
 
+
 # ============================================================
-# 3. ENCABEZADOS DEL NUEVO EXCEL ALTAS
+# 3. ENCABEZADOS REALES DEL NUEVO EXCEL ALTAS
 # ============================================================
+
+COLUMNAS_ALTAS_REALES = [
+    "AÑO", "CICLO", "PERIODO", "CLUSTER", "NIVEL", "REQUERIMIENTO",
+    "RESPONSABLE", "SUBJ", "COURSE", "NOMBRE_MATERIA", "SEDE",
+    "PARTE_PERIODO", "STATUS", "CAPACIDAD", "SECCION", "TIPO_HORARIO",
+    "METODO_EDUCATIVO", "SOCIO_INTEGRACION", "MODO_CALIFICAR",
+    "SESION", "COMENTARIOS", "FECHA_REGISTRO"
+]
+
 ALIAS_COLUMNAS = {
-    "area": "Subject", "subj": "Subject", "subject": "Subject",
-    "nocurso": "Course", "crse": "Course", "course": "Course",
-    "materia": "Nombre de la Materia", "nombremateria": "Nombre de la Materia",
-    "nombredelamateria": "Nombre de la Materia", "grupo": "Sección",
-    "seccion": "Sección", "sede": "Campus", "cupo": "Capacidad",
-    "status": "Estatus", "cluster": "Clúster", "parteperiodo": "Parte de Periodo",
-    "tipohorario": "Tipo de Horario", "metodoeducativo": "Método Educativo",
-    "mododecalificar": "Modo de Calificar", "sesion": "Sesion",
+    "ano": "Año", "ciclo": "Ciclo", "periodo": "Periodo",
+    "cluster": "Clúster", "nivel": "Nivel",
+    "requerimiento": "Requerimiento",
     "responsable": "Responsable", "responsables": "Responsable",
     "coordinador": "Responsable", "nombrederesponsable": "Responsable",
-    "responsableacademico": "Responsable", "nombreresponsable": "Responsable"
+    "subj": "Subject", "subject": "Subject", "area": "Subject",
+    "course": "Course", "crse": "Course", "nocurso": "Course",
+    "nombremateria": "Nombre de la Materia",
+    "nombredelamateria": "Nombre de la Materia",
+    "materia": "Nombre de la Materia",
+    "sede": "Campus", "campus": "Campus",
+    "parteperiodo": "Parte de Periodo",
+    "status": "Estatus", "estatus": "Estatus",
+    "capacidad": "Capacidad", "cupo": "Capacidad",
+    "seccion": "Sección", "grupo": "Sección",
+    "tipohorario": "Tipo de Horario",
+    "metodoeducativo": "Método Educativo",
+    "sociointegracion": "Socio Integración",
+    "sociodeintegracion": "Socio Integración",
+    "modocalificar": "Modo de Calificar",
+    "mododecalificar": "Modo de Calificar",
+    "sesion": "Sesion", "comentarios": "Comentarios",
+    "fecharegistro": "Fecha Registro"
 }
+
 MAPA_COLUMNAS = {normalizar_para_busqueda(c): c for c in COLUMNAS_ALTAS}
 MAPA_COLUMNAS.update(ALIAS_COLUMNAS)
 MAPA = MAPA_COLUMNAS
 
 def normalizar_columnas_altas(df):
     df = df.copy()
-    df.columns = [MAPA_COLUMNAS.get(normalizar_para_busqueda(c), limpiar_nombre_columna(c))
-                  for c in df.columns]
+    df.columns = [
+        MAPA_COLUMNAS.get(normalizar_para_busqueda(c), limpiar_nombre_columna(c))
+        for c in df.columns
+    ]
     duplicadas = df.columns[df.columns.duplicated()].tolist()
-    if duplicadas: raise ValueError(f"Columnas duplicadas después de normalizar: {duplicadas}")
+    if duplicadas:
+        raise ValueError(f"Columnas duplicadas después de normalizar: {duplicadas}")
     return df
+
 
 # ============================================================
 # 4. RESPONSABLES Y NOMBRES DE ARCHIVOS
