@@ -427,9 +427,8 @@ tab1, tab_err, tab3 = st.tabs([
 
 
 
-
 # ============================================================
-# PESTAÑA 1: VALIDACIÓN INTELIGENTE, ALTAS Y GENERACIÓN
+# PESTAÑA 1: VALIDACIÓN, CONFIGURACIONES Y GENERACIÓN
 # ============================================================
 with tab1:
     st.header("⚙️ Validación de ALTAS y Generación de Archivos")
@@ -437,12 +436,12 @@ with tab1:
     # 1. REINICIAR
     if st.button("🔄 Limpiar / Recomenzar", key="limpiar_t1"):
         claves = ["cat_ext_t1", "pa_t1", "altas_t1", "raw_altas", "res_auditoria",
-                  "cat_pa_cache", "advertencias_pa", "errores_restricciones", "duplicados_altas",
+                  "cat_pa_cache", "advertencias_pa", "errores_restricciones",
                   "df_secciones_corregidas", "errores_secciones", "zip_solicitudes_csv_altas",
                   "original_files_bytes", "cat_avanzado_cache", "cat_avanzado_firma",
                   "df_manual_fijo", "manual_candidatos", "manual_busqueda_realizada",
-                  "confirmar_errores_t1", "confirmar_duplicados_t1", "t1_pendientes_alta",
-                  "t1_confirmar_altas", "t1_firma_archivos", "t1_catalogo", "t1_version_editor"]
+                  "confirmar_errores_t1", "t1_pendientes_alta", "t1_confirmar_altas",
+                  "t1_firma_archivos", "t1_catalogo", "t1_version_editor"]
         claves += [k for k in st.session_state if k.startswith(("nom_t1_", "met_t1_", "manual_t1_", "t1_editor_"))]
         for k in claves: st.session_state.pop(k, None)
         st.rerun()
@@ -453,18 +452,16 @@ with tab1:
     file_cat_ext = c1.file_uploader("📚 Catálogo Avanzado (SCBCRSE)", type=["csv", "xlsx"], key="cat_ext_t1")
     file_pa = c2.file_uploader("📊 Catálogo PA (Opcional)", type=["csv"], key="pa_t1")
     files_altas = c3.file_uploader("📁 Archivos ALTAS", type=["xlsx", "xlsm"], accept_multiple_files=True, key="altas_t1")
-    st.caption("Las restricciones son internas. La PA es opcional. Se aceptan archivos Excel normales y con macros.")
+    st.caption("Las restricciones son internas. La PA es opcional y los Excel pueden contener macros.")
 
-    # Invalidar resultados cuando cambien los archivos, sin perder la tabla manual.
-    firma_actual = tuple(
-        (f.name, hashlib.sha256(f.getvalue()).hexdigest())
-        for f in ([file_cat_ext, file_pa] + list(files_altas or [])) if f is not None
-    )
+    # Invalidar resultados cuando cambien los archivos.
+    firma_actual = tuple((f.name, hashlib.sha256(f.getvalue()).hexdigest())
+                         for f in ([file_cat_ext, file_pa] + list(files_altas or [])) if f is not None)
     if st.session_state.get("t1_firma_archivos") != firma_actual:
         for k in ["raw_altas", "res_auditoria", "cat_pa_cache", "advertencias_pa",
-                  "errores_restricciones", "duplicados_altas", "df_secciones_corregidas",
-                  "errores_secciones", "zip_solicitudes_csv_altas", "t1_pendientes_alta",
-                  "t1_catalogo", "confirmar_errores_t1", "confirmar_duplicados_t1", "t1_confirmar_altas"]:
+                  "errores_restricciones", "df_secciones_corregidas", "errores_secciones",
+                  "zip_solicitudes_csv_altas", "t1_pendientes_alta", "t1_catalogo",
+                  "confirmar_errores_t1", "t1_confirmar_altas"]:
             st.session_state.pop(k, None)
         st.session_state.t1_firma_archivos = firma_actual
         st.session_state.t1_version_editor = st.session_state.get("t1_version_editor", 0) + 1
@@ -488,7 +485,7 @@ with tab1:
             llave = (sin_espacios(f.get("SCBCRSE_SUBJ_CODE")), sin_espacios(f.get("SCBCRSE_CRSE_NUMB")))
             if not all(llave): continue
             info = catalogo.setdefault(llave, {"titles": set(), "schd": set(), "insm": set(),
-                                                "gmod": set(), "pares": set(), "filas": []})
+                                                "gmod": set(), "pares": set()})
             for campo in ["SCBCRSE_TITLE", "SCRSYLN_LONG_COURSE_TITLE"]:
                 titulo = limpiar_espacios_y_mayusculas(f.get(campo))
                 if titulo: info["titles"].add(titulo)
@@ -498,13 +495,12 @@ with tab1:
             if m: info["insm"].add(m)
             if g: info["gmod"].add(g)
             if h and m: info["pares"].add((h, m))
-            info["filas"].append((h, m, g))
 
         st.session_state.cat_avanzado_cache = catalogo
         st.session_state.cat_avanzado_firma = firma
         return catalogo
 
-    # 4. VALIDACIÓN DE MATERIAS Y CONFIGURACIONES
+    # 4. VALIDAR MATERIA Y CONFIGURACIONES
     def validar_materia(fila, catalogo):
         subj, crse = sin_espacios(fila.get("Subject")), sin_espacios(fila.get("Course"))
         nombre = limpiar_espacios_y_mayusculas(fila.get("Nombre de la Materia"))
@@ -520,7 +516,6 @@ with tab1:
              "Comentario Nombres": "", "Comentario Horario": "", "Comentario Método": "",
              "Comentario Modo de Calificar": "", "Pendientes Alta": [], "Requiere Corrección": False}
 
-        # Si SUBJ + CRSE no existe, buscar sugerencias sin cambiar automáticamente las claves.
         if llave not in catalogo:
             candidatos = []
             for (s, c), info in catalogo.items():
@@ -533,7 +528,7 @@ with tab1:
                 r["Subj Sugerido"], r["Crse Sugerido"] = s, c
                 r["Comentario Nombres"] = f"SUBJ/CRSE no existen. Posible coincidencia: {s} {c} ({p:.0%})"
             else:
-                r["Comentario Nombres"] = "Materia no encontrada: requiere revisar si necesita alta en catálogo."
+                r["Comentario Nombres"] = "Materia no encontrada: revisar si requiere alta en catálogo."
             r["Requiere Corrección"] = True
             return r
 
@@ -550,34 +545,28 @@ with tab1:
             r["Comentario Nombres"] = "SUBJ/CRSE correctos, pero el nombre difiere."
             r["Requiere Corrección"] = True
 
-        # Los comentarios antiguos de la plantilla NO determinan el estado.
-        # Se comprueba cada valor directamente contra el catálogo actualizado.
         campos = [
-            ("schd", horario, "Tipo de Horario", "Comentario Horario", "Horario Sugerido"),
-            ("insm", metodo, "Método Educativo", "Comentario Método", "Método Sugerido"),
-            ("gmod", modo, "Modo de Calificar", "Comentario Modo de Calificar", "Modo de Calificar Sugerido")
+            ("schd", horario, "Tipo de Horario", "Comentario Horario"),
+            ("insm", metodo, "Método Educativo", "Comentario Método"),
+            ("gmod", modo, "Modo de Calificar", "Comentario Modo de Calificar")
         ]
-        for campo, actual, etiqueta, comentario, sugerido in campos:
-            permitidos = info[campo]
+        for campo, actual, etiqueta, comentario in campos:
             if not actual:
                 r[comentario] = f"{etiqueta} vacío: requiere revisión."
                 r["Requiere Corrección"] = True
-            elif actual in permitidos:
+            elif actual in info[campo]:
                 r[comentario] = "Correcto"
             else:
                 r[comentario] = f"{etiqueta} {actual} no existe para esta materia; requiere alta."
                 r["Pendientes Alta"].append((etiqueta, actual))
-                # No proponer otro valor automáticamente: podría ser un alta legítima.
 
-        # Verificar combinación únicamente cuando ambos códigos existen.
         if horario in info["schd"] and metodo in info["insm"] and info["pares"]:
             if (horario, metodo) not in info["pares"]:
-                r["Comentario Método"] = "Horario y método existen, pero su combinación requiere revisión."
+                r["Comentario Método"] = "Horario y método existen, pero la combinación requiere revisión."
                 r["Requiere Corrección"] = True
-
         return r
 
-    # 5. LISTADO DE ALTAS PENDIENTES
+    # 5. EXTRAER CONFIGURACIONES PENDIENTES DE ALTA
     def obtener_pendientes_altas(df, auditoria):
         pendientes = []
         for _, r in auditoria.iterrows():
@@ -646,16 +635,13 @@ with tab1:
                 st.session_state.raw_altas = total
                 st.session_state.res_auditoria = auditoria
                 st.session_state.cat_pa_cache = pa
-                st.session_state.t1_catalogo = catalogo
                 st.session_state.t1_pendientes_alta = pendientes
                 st.session_state.advertencias_pa = avisos
                 st.session_state.errores_restricciones = auditar_restricciones_internas(total)
-                st.session_state.duplicados_altas = detectar_altas_duplicadas(total)
                 st.session_state.df_secciones_corregidas = secciones
                 st.session_state.errores_secciones = errores_sec
                 st.session_state.zip_solicitudes_csv_altas = None
                 st.session_state.confirmar_errores_t1 = False
-                st.session_state.confirmar_duplicados_t1 = False
                 st.session_state.t1_confirmar_altas = False
                 st.session_state.t1_version_editor = st.session_state.get("t1_version_editor", 0) + 1
 
@@ -663,89 +649,55 @@ with tab1:
         except Exception as e:
             st.error(f"Error de validación: {e}")
 
-    # 7. RESULTADOS DE VALIDACIÓN
+    # 7. RESULTADOS
     if isinstance(st.session_state.get("res_auditoria"), pd.DataFrame):
         auditoria = st.session_state.res_auditoria
-        total = st.session_state.raw_altas
         pendientes = st.session_state.get("t1_pendientes_alta", pd.DataFrame())
         avisos_pa = st.session_state.get("advertencias_pa") or []
         errores_reglas = st.session_state.get("errores_restricciones")
-        duplicados = st.session_state.get("duplicados_altas")
 
-
-
-
-        # ============================================================
         # 7.1 CONFIGURACIONES PENDIENTES DE ALTA
-        # ============================================================
         st.divider()
-        
-        if isinstance(pendientes, pd.DataFrame) and not pendientes.empty:
+        if not pendientes.empty:
             st.subheader("📚 Configuraciones pendientes de alta")
-        
-            # Evitar solicitar varias veces la misma configuración
-            claves_alta = ["SUBJ", "COURSE", "Configuración", "Valor"]
-            resumen_altas = pendientes.drop_duplicates(subset=claves_alta).copy()
+            resumen_altas = pendientes.drop_duplicates(subset=["SUBJ", "COURSE", "Configuración", "Valor"])
             resumen_altas = resumen_altas.sort_values(["SUBJ", "COURSE", "Configuración", "Valor"])
-            detalle_altas = pendientes.sort_values(["SUBJ", "COURSE", "Configuración", "Valor"])
-        
-            c1, c2 = st.columns(2)
-            c1.metric("Configuraciones por dar de alta", len(resumen_altas))
-            c2.metric("Registros afectados", len(detalle_altas))
-        
-            st.warning(f"Se encontraron {len(resumen_altas)} configuraciones pendientes de alta.")
-        
-            # Visualización directa en Streamlit
+            st.warning(f"Se encontraron {len(resumen_altas)} configuraciones por dar de alta.")
+
             with st.expander("👀 Ver configuraciones pendientes", expanded=True):
                 st.dataframe(resumen_altas, hide_index=True, use_container_width=True)
-        
-            # Crear Excel descargable con dos hojas
+
             buffer_altas = io.BytesIO()
             with pd.ExcelWriter(buffer_altas, engine="openpyxl") as writer:
                 resumen_altas.to_excel(writer, index=False, sheet_name="Altas_Pendientes")
-                detalle_altas.to_excel(writer, index=False, sheet_name="Detalle")
-        
+                pendientes.to_excel(writer, index=False, sheet_name="Detalle")
                 for ws in writer.sheets.values():
-                    ws.freeze_panes = "A2"
-                    ws.auto_filter.ref = ws.dimensions
+                    ws.freeze_panes, ws.auto_filter.ref = "A2", ws.dimensions
                     for celda in ws[1]:
                         celda.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-                        celda.fill = PatternFill(start_color="7030A0", end_color="7030A0", fill_type="solid")
+                        celda.fill = PatternFill(start_color="7030A0", fill_type="solid")
                         celda.alignment = Alignment(horizontal="center", vertical="center")
-        
                     for columna in ws.columns:
                         ancho = max((len(str(c.value)) for c in columna if c.value is not None), default=8)
                         ws.column_dimensions[columna[0].column_letter].width = min(max(ancho + 3, 12), 45)
-        
-            st.download_button(
-                "📥 Descargar configuraciones pendientes (.xlsx)",
-                data=buffer_altas.getvalue(),
-                file_name="Configuraciones_Pendientes_Alta.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="descargar_altas_t1"
-            )
-        
-            st.checkbox(
-                "Ya revisé las configuraciones pendientes y deseo continuar con advertencia",
-                key="t1_confirmar_altas"
-            )
-        
-            st.caption("Si actualizas el Catálogo Avanzado y vuelves a validar, las configuraciones que ya existan desaparecerán del listado.")
-        
+
+            st.download_button("📥 Descargar configuraciones pendientes (.xlsx)", buffer_altas.getvalue(),
+                               file_name="Configuraciones_Pendientes_Alta.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               use_container_width=True, key="descargar_altas_t1")
+            st.checkbox("Ya revisé las configuraciones pendientes y deseo continuar con advertencia",
+                        key="t1_confirmar_altas")
+            st.caption("Si actualizas el Catálogo Avanzado y vuelves a validar, las configuraciones existentes desaparecerán.")
         else:
-            st.success("✅ No hay configuraciones pendientes de alta en el catálogo.")
+            st.success("No hay configuraciones pendientes de alta.")
 
-
-        # 7.2 MESA DE CONTROL: SOLO CORRECCIONES REALES
+        # 7.2 MESA DE CONTROL: SOLO SI HAY CORRECCIONES
         corregibles = auditoria[auditoria["Requiere Corrección"] == True].copy()
         if not corregibles.empty:
             st.subheader("⚖️ Mesa de Control — Correcciones necesarias")
-            st.caption("Las configuraciones que solamente requieren alta no aparecen aquí para cambiarse por otros valores.")
-
             for archivo in corregibles["Archivo"].unique():
                 sub = corregibles[corregibles["Archivo"] == archivo]
-                with st.expander(f"⚠️ {archivo} — {len(sub)} registros para revisar", expanded=True):
+                with st.expander(f"⚠️ {archivo} — {len(sub)} registros", expanded=True):
                     with st.form(f"revision_{hashlib.md5(archivo.encode()).hexdigest()[:10]}"):
                         t1, t2 = st.tabs(["Nombres y Claves", "Horarios y Métodos"])
                         cols_nom = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario Nombres",
@@ -779,7 +731,7 @@ with tab1:
                             st.success("Correcciones guardadas.")
                             st.rerun()
 
-        # 7.3 OTRAS ADVERTENCIAS
+        # 7.3 ADVERTENCIAS
         if avisos_pa:
             st.subheader("⚠️ Advertencias PA")
             st.dataframe(pd.DataFrame(avisos_pa), hide_index=True, use_container_width=True)
@@ -787,12 +739,6 @@ with tab1:
         if isinstance(errores_reglas, pd.DataFrame) and not errores_reglas.empty:
             st.subheader("📋 Restricciones internas")
             st.dataframe(errores_reglas, hide_index=True, use_container_width=True)
-
-        if isinstance(duplicados, pd.DataFrame) and not duplicados.empty:
-            st.subheader("🔁 Posibles ALTAS duplicadas")
-            st.dataframe(duplicados, hide_index=True, use_container_width=True)
-            st.checkbox("Revisé los posibles duplicados y deseo conservarlos",
-                        key="confirmar_duplicados_t1")
 
         hay_otras_advertencias = bool(
             avisos_pa or (isinstance(errores_reglas, pd.DataFrame) and not errores_reglas.empty)
@@ -802,7 +748,7 @@ with tab1:
             st.checkbox("Revisé las advertencias y correcciones; deseo continuar",
                         key="confirmar_errores_t1")
 
-        # 8. APLICAR CORRECCIONES Y SECCIONES AUTOMÁTICAMENTE
+        # 8. CORRECCIONES Y SECCIONES AUTOMÁTICAS
         def construir_altas_corregidas():
             df = st.session_state.raw_altas.copy()
             aprobadas = st.session_state.res_auditoria
@@ -819,14 +765,13 @@ with tab1:
 
         st.divider()
         st.subheader("🔢 Secciones asignadas")
-        st.caption("Las secciones se calculan automáticamente; no necesitas presionar otro botón.")
         try:
             df_sec, errores_sec = construir_altas_corregidas()
             st.session_state.df_secciones_corregidas = df_sec
             st.session_state.errores_secciones = errores_sec
             columnas = ["ArchivoOrigen", "Periodo", "Responsable", "Subject", "Course",
                         "Sección Original", "Sección", "Sección Modificada"]
-            with st.expander("Ver secciones asignadas", expanded=False):
+            with st.expander("Ver secciones asignadas"):
                 st.dataframe(df_sec[[c for c in columnas if c in df_sec.columns]],
                              hide_index=True, use_container_width=True)
             st.metric("Secciones modificadas", int(df_sec["Sección Modificada"].sum()))
@@ -835,9 +780,8 @@ with tab1:
                 st.dataframe(errores_sec, hide_index=True, use_container_width=True)
         except Exception as e:
             st.error(f"Error al calcular secciones: {e}")
-            errores_sec = pd.DataFrame([{"Detalle": str(e)}])
 
-        # 9. PREPARAR CSV BANNER: CONSERVAR LAS 15 COLUMNAS EXACTAS
+        # 9. CSV BANNER: 15 COLUMNAS ORIGINALES
         def preparar_csv_banner(df):
             r = pd.DataFrame(index=df.index)
             equivalencias = {
@@ -859,20 +803,15 @@ with tab1:
                 else cluster_oficial(f.get("Clúster")), axis=1)
             return r[COLUMNAS_CSV].fillna("").to_csv(**CSV_KWARGS_R)
 
-        # 10. GENERACIÓN FINAL
+        # 10. GENERAR SOLICITUDES + CSV_ALTAS
         st.divider()
-        st.subheader("📦 Generar SOLICITUDES y CSV_ALTAS")
-
         if st.button("💾 Generar SOLICITUDES y CSV_ALTAS", type="primary",
                      use_container_width=True, key="generar_salidas_t1"):
             try:
                 if not pendientes.empty and not st.session_state.get("t1_confirmar_altas"):
-                    raise ValueError("Revisa y confirma primero las configuraciones pendientes de alta.")
+                    raise ValueError("Revisa y confirma las configuraciones pendientes de alta.")
                 if hay_otras_advertencias and not st.session_state.get("confirmar_errores_t1"):
-                    raise ValueError("Confirma primero las advertencias y correcciones.")
-                if isinstance(duplicados, pd.DataFrame) and not duplicados.empty:
-                    if not st.session_state.get("confirmar_duplicados_t1"):
-                        raise ValueError("Confirma primero los posibles duplicados.")
+                    raise ValueError("Confirma las advertencias antes de continuar.")
 
                 corregido, errores = construir_altas_corregidas()
                 if not errores.empty: raise ValueError("Hay secciones sin asignar.")
@@ -885,7 +824,7 @@ with tab1:
                     zip_final = generar_zip_altas(corregido, st.session_state.original_files_bytes,
                                                   preparar_csv_banner)
                 st.session_state.zip_solicitudes_csv_altas = zip_final
-                st.success("Archivos generados correctamente.")
+                st.success("SOLICITUDES y CSV_ALTAS generados correctamente.")
             except Exception as e:
                 st.session_state.zip_solicitudes_csv_altas = None
                 st.error(f"No se pudieron generar los archivos: {e}")
@@ -1059,7 +998,6 @@ with tab1:
 # ============================================================
 # FIN DE PESTAÑA 1
 # ============================================================
-
 
 
 
