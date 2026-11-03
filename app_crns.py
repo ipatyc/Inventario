@@ -411,10 +411,11 @@ st.set_page_config(page_title="Consola Iris Cavazos", page_icon="⚙️", layout
 st.title("⚙️ Consola de Control de Materias e Inyección de NRCs")
 st.markdown("---")
 
-tab1, tab_err, tab3 = st.tabs([
+tab1, tab_err, tab3, tab4 = st.tabs([
     "1️⃣ Proceso: Validación y Generar CSVs",
     "⚠️ Reporte de Errores (Extraer Delta)",
-    "2️⃣ Proceso: Inyección de NRCs Masiva (ARGOS)"
+    "2️⃣ Proceso: Inyección de NRCs Masiva (ARGOS)",
+    "3️⃣ Proceso: Gestión de Cruces"
 ])
 
 # ============================================================
