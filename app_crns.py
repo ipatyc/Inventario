@@ -126,7 +126,7 @@ st.markdown("---")
 tab1, tab_err, tab3 = st.tabs([
     "1️⃣ Proceso: Validación y Generar CSVs",
     "⚠️ Reporte de Errores (Extraer Delta)",
-    "2️⃣ Proceso: Inyección de NRCs Masiva (ARGOS)"
+    "2️⃣ Proceso: Inyección de NRCs Masiva (ARGOS)"])
 
 
 metodo = st.selectbox("Método educativo", opciones_metodo, key="manual_t1_metodo")
