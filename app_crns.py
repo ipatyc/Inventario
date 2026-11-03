@@ -1674,3 +1674,4 @@ with tab4:
             for nombre, datos in archivos.items(): z.writestr(nombre, datos)
         st.download_button("📥 Descargar cruces (.ZIP)", buffer.getvalue(), file_name="CRUCES_PROCESADOS.zip",
                            mime="application/zip", type="primary", use_container_width=True, key="t4_descargar")
+
