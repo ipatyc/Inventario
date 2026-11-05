@@ -1,5 +1,4 @@
 
-
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
@@ -197,10 +196,13 @@ def nombre_solicitud(df, extension=".xlsm"):
     unir = lambda nombres: " y ".join(nombres) if len(nombres) == 2 else ", ".join(nombres)
     return f"{'-'.join(periodos)} {unir(responsables)} {unir(nombres_cluster)} CRNs{extension}"
 
-def nombre_csv_altas(periodo, responsable):
-    periodo, responsable = nombre_seguro(periodo), responsable_normalizado(responsable)
-    if not periodo or not responsable: raise ValueError("Falta Periodo o Responsable para nombrar CSV_ALTAS.")
-    return f"{periodo} {responsable} CSV_ALTAS.csv"
+def nombre_csv_altas(periodo, responsable, cluster):
+    periodo = nombre_seguro(periodo)
+    responsable = responsable_normalizado(responsable)
+    cluster = nombre_seguro(cluster_oficial(cluster))
+    if not periodo or not responsable or not cluster:
+        raise ValueError("Falta Periodo, Responsable o Clúster para nombrar CSV_ALTAS.")
+    return f"{periodo} {responsable} {cluster} CSV_ALTAS.csv"
 
 # ============================================================
 # 5. CATÁLOGO PA OPCIONAL
@@ -377,12 +379,18 @@ def generar_zip_altas(df_final, archivos_originales, funcion_csv):
             z.writestr(ruta, contenido)
             nombres.add(ruta.casefold())
 
-        # CSV_ALTAS: un CSV por periodo y responsable, aunque provenga de varios Excel.
-        for (periodo, responsable), grupo in df.groupby(["Periodo", "Responsable"], sort=False):
-            nombre = nombre_csv_altas(periodo, responsable)
+        # CSV_ALTAS: un CSV por periodo, responsable y clúster, incluso entre varios Excel.
+        df["Clúster"] = df["Clúster"].apply(cluster_oficial)
+        nombres_csv = set()
+        for (periodo, responsable, cluster), grupo in df.groupby(["Periodo", "Responsable", "Clúster"], sort=False):
+            nombre = nombre_csv_altas(periodo, responsable, cluster)
+            ruta = f"CSV_ALTAS/{nombre}"
+            if ruta.casefold() in nombres_csv:
+                raise ValueError(f"Dos grupos generarían el mismo nombre CSV: {nombre}")
             contenido = funcion_csv(grupo)
             if isinstance(contenido, str): contenido = contenido.encode("utf-8")
-            z.writestr(f"CSV_ALTAS/{nombre}", contenido)
+            z.writestr(ruta, contenido)
+            nombres_csv.add(ruta.casefold())
 
     return buffer.getvalue()
 
@@ -851,7 +859,9 @@ with tab1:
     st.subheader("🔍 Buscador y creación manual")
 
     if not isinstance(st.session_state.get("df_manual_fijo"), pd.DataFrame):
-        st.session_state.df_manual_fijo = pd.DataFrame(columns=COLUMNAS_CSV + ["Responsable", "Nivel"])
+        st.session_state.df_manual_fijo = pd.DataFrame(columns=COLUMNAS_CSV + ["Responsable", "Nivel", "Clúster"])
+    if "Clúster" not in st.session_state.df_manual_fijo.columns:
+        st.session_state.df_manual_fijo["Clúster"] = st.session_state.df_manual_fijo["datocomplementario"].apply(cluster_oficial)
     if "manual_candidatos" not in st.session_state: st.session_state.manual_candidatos = []
 
     with st.form("buscar_manual_t1"):
@@ -917,7 +927,7 @@ with tab1:
                     seccion, horario, metodo, "D2L", modo, sesion,
                     "Bachillerato" if nivel == "BACHILLERATO" else cluster
                 ]))
-                nuevo.update({"Responsable": responsable_normalizado(responsable), "Nivel": nivel})
+                nuevo.update({"Responsable": responsable_normalizado(responsable), "Nivel": nivel, "Clúster": cluster})
                 st.session_state.df_manual_fijo = pd.concat(
                     [st.session_state.df_manual_fijo, pd.DataFrame([nuevo])], ignore_index=True)
                 st.session_state.manual_t1_editor_version = st.session_state.get("manual_t1_editor_version", 0) + 1
@@ -974,8 +984,10 @@ with tab1:
     # 13. CSV MANUAL
     df_out = st.session_state.df_manual_fijo.copy()
     if not df_out.empty:
-        if df_out["PERIODO"].apply(limpiar_clave_texto).eq("").any() or df_out["Responsable"].apply(limpiar_clave_texto).eq("").any():
-            st.warning("Hay registros manuales sin Periodo o Responsable.")
+        if (df_out["PERIODO"].apply(limpiar_clave_texto).eq("").any()
+                or df_out["Responsable"].apply(limpiar_clave_texto).eq("").any()
+                or df_out["Clúster"].apply(limpiar_clave_texto).eq("").any()):
+            st.warning("Hay registros manuales sin Periodo, Responsable o Clúster.")
         else:
             temporal = pd.DataFrame({
                 "Periodo": df_out["PERIODO"], "Subject": df_out["SUBJ"], "Course": df_out["COURSE"],
@@ -993,10 +1005,13 @@ with tab1:
                 for c in ["SUBJ", "COURSE", "TIPODEHORARIO", "METODO_EDUCATIVO"]:
                     df_out[c] = df_out[c].apply(sin_espacios)
 
+                df_out["_ClusterArchivo"] = df_out["Clúster"].apply(cluster_oficial)
                 buffer = io.BytesIO()
                 with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as z:
-                    for (periodo, resp), grupo in df_out.groupby(["PERIODO", "Responsable"], sort=False):
-                        nombre = nombre_csv_altas(periodo, resp)
+                    for (periodo, resp, cluster_archivo), grupo in df_out.groupby(
+                        ["PERIODO", "Responsable", "_ClusterArchivo"], sort=False
+                    ):
+                        nombre = nombre_csv_altas(periodo, resp, cluster_archivo)
                         z.writestr(f"CSV_ALTAS/{nombre}",
                                    grupo[COLUMNAS_CSV].to_csv(**CSV_KWARGS_R).encode("utf-8"))
 
@@ -1007,6 +1022,7 @@ with tab1:
 # ============================================================
 # FIN DE PESTAÑA 1
 # ============================================================
+
 
 
 # ============================================================
@@ -1274,6 +1290,28 @@ with tab3:
             ancho = max((len(str(c.value)) for c in columna if c.value is not None), default=8)
             ws.column_dimensions[columna[0].column_letter].width = min(max(ancho + 3, 11), 45)
 
+    # Excel final independiente, sin macros y con los 19 encabezados solicitados.
+    T3_COLUMNAS_FINAL = ["PERIODO", "CLUSTER", "NIVEL", "REQUERIMIENTO", "RESPONSABLE", "NRC", "SUBJ", "COURSE", "NOMBRE_MATERIA", "SEDE", "PARTE_PERIODO", "STATUS", "CAPACIDAD", "SECCION", "TIPO_HORARIO", "METODO_EDUCATIVO", "SOCIO_INTEGRACION", "MODO_CALIFICAR", "SESION"]
+
+    def t3_excel_final_normal(ws_altas, filas_con_nrc):
+        encabezados = {normalizar_para_busqueda(c.value): c.column for c in ws_altas[1] if c.value is not None}
+        def dato(fila, nombre):
+            col = encabezados.get(normalizar_para_busqueda(nombre))
+            valor = ws_altas.cell(fila, col).value if col else None
+            return limpiar_clave_texto(valor)
+        registros = []
+        for fila_excel, nrc in filas_con_nrc:
+            registro = {c: dato(fila_excel, c) for c in T3_COLUMNAS_FINAL if c != "NRC"}
+            registro["NRC"] = limpiar_clave_texto(nrc)
+            registro["SECCION"] = clave_seccion(registro["SECCION"])
+            registros.append(registro)
+        resultado = pd.DataFrame(registros, columns=T3_COLUMNAS_FINAL)
+        salida = io.BytesIO()
+        with pd.ExcelWriter(salida, engine="openpyxl") as writer:
+            resultado.to_excel(writer, index=False, sheet_name="CRNs_Finales")
+            formatear_excel_t3(writer.sheets["CRNs_Finales"])
+        return salida.getvalue()
+
     # 3. MODO COMPLETO: emparejar registros por contenido, no por nombre ni posicion.
     if modo.startswith("📦"):
         st.subheader("📦 Inyección de NRC en SOLICITUDES")
@@ -1340,6 +1378,8 @@ with tab3:
                             if encontrados != len(filas):
                                 alertas.append({"Archivo": fx.name, "Estado": "Libro no exportado", "Detalle": f"{encontrados}/{len(filas)} filas con NRC unico"})
                                 continue
+                            # Crear Excel plano antes de guardar el libro con macros.
+                            excel_plano = t3_excel_final_normal(ws_altas, [(f, codigo) for f, _, codigo in filas])
                             if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
                             ws = wb.create_sheet(HOJA_SALIDA_NRC)
                             ws.append(["Fila ALTAS", "NRC"] + list(COLUMNAS_ALTAS_REALES))
@@ -1351,11 +1391,23 @@ with tab3:
                             wb.save(salida)
                             nombre = fx.name.rsplit(".", 1)[0] + "_con_NRC" + ext
                             original_nombre, n = nombre, 2
-                            while nombre in nombres_zip:
+                            while nombre.casefold() in nombres_zip:
                                 nombre = original_nombre[:-len(ext)] + f" ({n})" + ext
                                 n += 1
-                            nombres_zip.add(nombre)
-                            z.writestr(nombre, salida.getvalue())
+                            nombres_zip.add(nombre.casefold())
+                            z.writestr(f"SOLICITUDES_CON_NRC/{nombre}", salida.getvalue())
+                            nombre_plano = fx.name.rsplit(".", 1)[0]
+                            if nombre_plano.endswith(" CRNs"):
+                                nombre_plano = nombre_plano[:-5] + " CRNs Finales"
+                            else:
+                                nombre_plano += " CRNs Finales"
+                            nombre_plano += ".xlsx"
+                            original_plano, n_plano = nombre_plano, 2
+                            while nombre_plano.casefold() in nombres_zip:
+                                nombre_plano = original_plano[:-5] + f" ({n_plano}).xlsx"
+                                n_plano += 1
+                            nombres_zip.add(nombre_plano.casefold())
+                            z.writestr(f"CRNS_FINALES_SIN_MACROS/{nombre_plano}", excel_plano)
                             procesados += 1
                     st.session_state.final_argos_zip = buffer.getvalue() if procesados else None
                     st.session_state.t3_alertas = alertas
