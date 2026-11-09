@@ -354,44 +354,111 @@ def crear_solicitud_excel(df_grupo, archivos_originales):
 # ============================================================
 # 10. GENERAR ZIP SOLICITUDES + CSV_ALTAS
 # ============================================================
-def generar_zip_altas(df_final, archivos_originales, funcion_csv):
-    requeridas = ["Periodo", "Responsable", "Clúster", "ArchivoOrigen", "_FilaExcel"]
-    faltantes = [c for c in requeridas if c not in df_final.columns]
-    if faltantes: raise ValueError(f"Faltan columnas para exportar: {faltantes}")
+# ============================================================
+# 10. SEPARACION Y EXPORTACION DE SOLICITUDES + CSV_ALTAS
+# ============================================================
+MODOS_SEPARACION = ["Sin separar", "Por periodo", "Por clúster", "Por periodo y clúster"]
 
+def grupos_exportacion_altas(df_final, modo="Sin separar"):
+    if modo not in MODOS_SEPARACION: raise ValueError(f"Modo de separación desconocido: {modo}")
     df = df_final.copy()
+    obligatorias = ["Periodo", "Responsable", "Clúster", "ArchivoOrigen", "_FilaExcel"]
+    faltantes = [c for c in obligatorias if c not in df.columns]
+    if faltantes: raise ValueError(f"Faltan columnas para exportar: {faltantes}")
     df["Periodo"] = df["Periodo"].apply(limpiar_clave_texto)
     df["Responsable"] = df["Responsable"].apply(responsable_normalizado)
-    if df["Periodo"].eq("").any() or df["Responsable"].eq("").any() or df["Clúster"].apply(limpiar_clave_texto).eq("").any():
-        raise ValueError("Hay ALTAS sin Periodo, Responsable o Clúster.")
+    df["Clúster"] = df["Clúster"].apply(cluster_oficial)
+    for c in ["Periodo", "Responsable", "Clúster"]:
+        if df[c].apply(limpiar_clave_texto).eq("").any(): raise ValueError(f"Hay ALTAS sin {c}.")
+    # Conservar siempre la procedencia para no fusionar solicitudes de distintos libros.
+    claves = ["ArchivoOrigen", "Responsable"]
+    if modo in ("Por periodo", "Por periodo y clúster"): claves.append("Periodo")
+    if modo in ("Por clúster", "Por periodo y clúster"): claves.append("Clúster")
+    return [(k, g.copy()) for k, g in df.groupby(claves, sort=False, dropna=False)]
 
-    buffer = io.BytesIO()
+def nombre_csv_grupo_altas(df_grupo):
+    periodos = sorted({nombre_seguro(x) for x in df_grupo["Periodo"] if nombre_seguro(x)})
+    responsables = responsables_unicos(df_grupo["Responsable"])
+    clusters = sorted({nombre_seguro(cluster_oficial(x)) for x in df_grupo["Clúster"] if nombre_seguro(x)}, key=normalizar_para_busqueda)
+    if not periodos or not responsables or not clusters: raise ValueError("Faltan datos para nombrar CSV_ALTAS.")
+    unir = lambda xs: " y ".join(xs) if len(xs) == 2 else ", ".join(xs)
+    return f"{'-'.join(periodos)} {unir(responsables)} {unir(clusters)} CSV_ALTAS.csv"
+
+def ruta_zip_unica(carpeta, nombre, rutas):
+    base, extension = nombre.rsplit(".", 1)
+    candidato, n = f"{carpeta}/{nombre}", 2
+    while candidato.casefold() in rutas:
+        candidato = f"{carpeta}/{base} ({n}).{extension}"
+        n += 1
+    rutas.add(candidato.casefold())
+    return candidato
+
+def crear_excel_normal_altas(df_grupo, archivos_originales):
+    # Excel sin VBA: solo las filas del grupo, en el mismo orden de ALTAS.
+    origenes = df_grupo["ArchivoOrigen"].dropna().unique().tolist()
+    if len(origenes) != 1: raise ValueError("Un Excel separado debe tener un solo origen.")
+    origen = origenes[0]
+    wb_origen = openpyxl.load_workbook(io.BytesIO(archivos_originales[origen]), read_only=True, data_only=False)
+    hoja = next((h for h in wb_origen.sheetnames if h.strip().upper() == HOJA_ALTAS), None)
+    if hoja is None: raise ValueError(f"{origen}: falta hoja ALTAS.")
+    ws_origen = wb_origen[hoja]
+    encabezados = [limpiar_clave_texto(c.value) for c in ws_origen[1]]
+    # Preservar encabezados reales de ALTAS y sus 22 campos; nunca añadir columnas técnicas.
+    columnas = {normalizar_para_busqueda(c): i for i, c in enumerate(encabezados)}
+    equivalencias = {"periodo": "Periodo", "responsable": "Responsable", "cluster": "Clúster",
+                    "subj": "Subject", "course": "Course", "seccion": "Sección",
+                    "tipohorario": "Tipo de Horario", "metodoeducativo": "Método Educativo",
+                    "modocalificar": "Modo de Calificar", "parteperiodo": "Parte de Periodo",
+                    "status": "Estatus", "capacidad": "Capacidad", "sesion": "Sesion", "sede": "Campus"}
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = HOJA_ALTAS
+    ws.append(encabezados)
+    for _, fila in df_grupo.iterrows():
+        numero = int(fila["_FilaExcel"])
+        valores = [ws_origen.cell(numero, j + 1).value for j in range(len(encabezados))]
+        for cabecera, campo in equivalencias.items():
+            if cabecera in columnas and campo in fila.index:
+                valor = fila[campo]
+                valores[columnas[cabecera]] = None if pd.isna(valor) else str(valor)
+        ws.append(valores)
+    wb_origen.close()
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    for c in ws[1]:
+        c.fill = PatternFill(fill_type="solid", fgColor="7030A0")
+        c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for col in ws.columns:
+        ancho = min(40, max(12, max(len(str(c.value or "")) for c in col) + 2))
+        ws.column_dimensions[col[0].column_letter].width = ancho
+    salida = io.BytesIO()
+    wb.save(salida)
+    return salida.getvalue()
+
+def generar_zip_altas(df_final, archivos_originales, funcion_csv, modo_separacion="Sin separar"):
+    grupos = grupos_exportacion_altas(df_final, modo_separacion)
+    df = df_final.copy()
+    rutas, buffer = set(), io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as z:
-        # Un Excel por archivo original. Evitar colisiones con consecutivos.
-        nombres = set()
-        for origen, grupo in df.groupby("ArchivoOrigen", sort=False):
-            contenido, extension = crear_solicitud_excel(grupo, archivos_originales)
-            nombre = nombre_solicitud(grupo, extension)
-            ruta, consecutivo = f"SOLICITUDES/{nombre}", 2
-            while ruta.casefold() in nombres:
-                ruta = f"SOLICITUDES/{nombre[:-len(extension)]} ({consecutivo}){extension}"
-                consecutivo += 1
-            z.writestr(ruta, contenido)
-            nombres.add(ruta.casefold())
-
-        # CSV_ALTAS: un CSV por periodo, responsable y clúster, incluso entre varios Excel.
-        df["Clúster"] = df["Clúster"].apply(cluster_oficial)
-        nombres_csv = set()
-        for (periodo, responsable, cluster), grupo in df.groupby(["Periodo", "Responsable", "Clúster"], sort=False):
-            nombre = nombre_csv_altas(periodo, responsable, cluster)
-            ruta = f"CSV_ALTAS/{nombre}"
-            if ruta.casefold() in nombres_csv:
-                raise ValueError(f"Dos grupos generarían el mismo nombre CSV: {nombre}")
+        # Cada grupo exporta un CSV y, si hay separación, un Excel normal equivalente.
+        for _, grupo in grupos:
+            nombre_csv = nombre_csv_grupo_altas(grupo)
             contenido = funcion_csv(grupo)
             if isinstance(contenido, str): contenido = contenido.encode("utf-8")
-            z.writestr(ruta, contenido)
-            nombres_csv.add(ruta.casefold())
-
+            z.writestr(ruta_zip_unica("CSV_ALTAS", nombre_csv, rutas), contenido)
+            if modo_separacion != "Sin separar":
+                nombre_excel = nombre_solicitud(grupo, ".xlsx")
+                contenido_excel = crear_excel_normal_altas(grupo, archivos_originales)
+                z.writestr(ruta_zip_unica("ALTAS_SEPARADAS", nombre_excel, rutas), contenido_excel)
+        # Unicamente devolver el libro con macros cuando el nombre original sea incorrecto.
+        for origen, grupo in df.groupby("ArchivoOrigen", sort=False):
+            extension = ".xlsm" if origen.lower().endswith(".xlsm") else ".xlsx"
+            if extension != ".xlsm": continue
+            esperado = nombre_solicitud(grupo, extension)
+            if normalizar_para_busqueda(origen) == normalizar_para_busqueda(esperado): continue
+            contenido, _ = crear_solicitud_excel(grupo, archivos_originales)
+            z.writestr(ruta_zip_unica("MACROS_RENOMBRADAS", esperado, rutas), contenido)
     return buffer.getvalue()
 
 # ============================================================
@@ -440,7 +507,7 @@ with tab1:
                   "original_files_bytes", "cat_avanzado_cache", "cat_avanzado_firma",
                   "df_manual_fijo", "manual_candidatos", "manual_busqueda_realizada",
                   "confirmar_errores_t1", "t1_pendientes_alta", "t1_confirmar_altas",
-                  "t1_firma_archivos", "t1_catalogo", "t1_version_editor"]
+                  "t1_firma_archivos", "t1_catalogo", "t1_version_editor", "t1_modo_separacion", "t1_modo_generado"]
         claves += [k for k in st.session_state if k.startswith(("nom_t1_", "met_t1_", "manual_t1_", "t1_editor_"))]
         for k in claves: st.session_state.pop(k, None)
         st.rerun()
@@ -499,14 +566,12 @@ with tab1:
         st.session_state.cat_avanzado_firma = firma
         return catalogo
 
-    # 4. VALIDAR MATERIA Y CONFIGURACIONES
+    # 4. VALIDACIÓN UNIFICADA: MATERIA, PAREJA HORARIO/MÉTODO Y MODO INDEPENDIENTE
     def validar_materia(fila, catalogo):
         subj, crse = sin_espacios(fila.get("Subject")), sin_espacios(fila.get("Course"))
         nombre = limpiar_espacios_y_mayusculas(fila.get("Nombre de la Materia"))
         horario, metodo = sin_espacios(fila.get("Tipo de Horario")), sin_espacios(fila.get("Método Educativo"))
         modo = sin_espacios(fila.get("Modo de Calificar"))
-        llave = (subj, crse)
-
         r = {"Luz Verde": False, "Materia Excel": nombre, "Materia Catálogo": "",
              "Subj Original": subj, "Crse Original": crse, "Subj Sugerido": subj, "Crse Sugerido": crse,
              "Horario Original": horario, "Horario Sugerido": horario,
@@ -514,74 +579,63 @@ with tab1:
              "Modo de Calificar Original": modo, "Modo de Calificar Sugerido": modo,
              "Comentario Nombres": "", "Comentario Horario": "", "Comentario Método": "",
              "Comentario Modo de Calificar": "", "Pendientes Alta": [], "Requiere Corrección": False}
-
-        if llave not in catalogo:
+        info = catalogo.get((subj, crse))
+        if info is None:
             candidatos = []
-            for (s, c), info in catalogo.items():
-                p_nombre = max([similitud(normalizar_para_cruce(nombre), normalizar_para_cruce(t))
-                                for t in info["titles"]] or [0])
-                puntaje = p_nombre * 0.55 + similitud(subj, s) * 0.25 + similitud(crse, c) * 0.20
-                if puntaje >= 0.63: candidatos.append((puntaje, s, c))
+            for (s, c), datos in catalogo.items():
+                pn = max((similitud(normalizar_para_cruce(nombre), normalizar_para_cruce(t)) for t in datos["titles"]), default=0)
+                puntuacion = pn * .55 + similitud(subj, s) * .25 + similitud(crse, c) * .20
+                if puntuacion >= .63: candidatos.append((puntuacion, s, c))
             if candidatos:
                 p, s, c = max(candidatos)
                 r["Subj Sugerido"], r["Crse Sugerido"] = s, c
-                r["Comentario Nombres"] = f"SUBJ/CRSE no existen. Posible coincidencia: {s} {c} ({p:.0%})"
-            else:
-                r["Comentario Nombres"] = "Materia no encontrada: revisar si requiere alta en catálogo."
+                r["Comentario Nombres"] = f"SUBJ/COURSE no encontrados. Posible materia: {s} {c} ({p:.0%})."
+            else: r["Comentario Nombres"] = "Materia no encontrada; revisar clave o alta de materia."
             r["Requiere Corrección"] = True
             return r
-
-        info = catalogo[llave]
         titulos = sorted(info["titles"])
         r["Materia Catálogo"] = titulos[0] if titulos else ""
-        nombres = {normalizar_para_cruce(t) for t in titulos}
-
-        if not titulos:
-            r["Comentario Nombres"] = "Materia encontrada por claves; catálogo sin título verificable."
-        elif normalizar_para_cruce(nombre) in nombres:
-            r["Comentario Nombres"] = "Todo correcto"
+        if not titulos: r["Comentario Nombres"] = "Sin título verificable en catálogo."
+        elif normalizar_para_cruce(nombre) in {normalizar_para_cruce(t) for t in titulos}:
+            r["Comentario Nombres"] = "Correcto"
         else:
-            r["Comentario Nombres"] = "SUBJ/CRSE correctos, pero el nombre difiere."
+            r["Comentario Nombres"] = "Nombre diferente al catálogo; revisar."
             r["Requiere Corrección"] = True
-
-        campos = [
-            ("schd", horario, "Tipo de Horario", "Comentario Horario"),
-            ("insm", metodo, "Método Educativo", "Comentario Método"),
-            ("gmod", modo, "Modo de Calificar", "Comentario Modo de Calificar")
-        ]
-        for campo, actual, etiqueta, comentario in campos:
-            if not actual:
-                r[comentario] = f"{etiqueta} vacío: requiere revisión."
-                r["Requiere Corrección"] = True
-            elif actual in info[campo]:
-                r[comentario] = "Correcto"
-            else:
-                r[comentario] = f"{etiqueta} {actual} no existe para esta materia; requiere alta."
-                r["Pendientes Alta"].append((etiqueta, actual))
-
-        if horario in info["schd"] and metodo in info["insm"] and info["pares"]:
-            if (horario, metodo) not in info["pares"]:
-                r["Comentario Método"] = "Horario y método existen, pero la combinación requiere revisión."
-                r["Requiere Corrección"] = True
+        if not horario or not metodo:
+            r["Comentario Horario"] = "Tipo de horario o método educativo vacío."
+            r["Comentario Método"] = "Revisar la pareja solicitada."
+            r["Requiere Corrección"] = True
+        elif (horario, metodo) in info["pares"]:
+            r["Comentario Horario"] = r["Comentario Método"] = "Combinación correcta"
+        else:
+            r["Comentario Horario"] = f"Combinación {horario} + {metodo} no registrada para {subj} {crse}."
+            r["Comentario Método"] = "Pendiente de alta de combinación horario/método."
+            r["Pendientes Alta"].append(("Tipo de Horario + Método Educativo", horario, metodo, "Combinación no registrada"))
+        if not modo:
+            r["Comentario Modo de Calificar"] = "Modo de calificar vacío; revisar."
+            r["Requiere Corrección"] = True
+        elif modo in info["gmod"]: r["Comentario Modo de Calificar"] = "Correcto"
+        else:
+            r["Comentario Modo de Calificar"] = f"Modo de calificar {modo} no registrado para {subj} {crse}."
+            r["Pendientes Alta"].append(("Modo de Calificar", "", "", modo))
         return r
 
-    # 5. EXTRAER CONFIGURACIONES PENDIENTES DE ALTA
+    # 5. REPORTE DE ALTAS PENDIENTES: MOSTRAR LA PAREJA COMPLETA
     def obtener_pendientes_altas(df, auditoria):
-        pendientes = []
+        columnas = ["Periodo", "SUBJ", "COURSE", "Materia", "Configuración", "Tipo de Horario",
+                    "Método Educativo", "Modo de Calificar", "Motivo", "Responsable", "Archivo"]
+        registros = []
         for _, r in auditoria.iterrows():
             fila = df.iloc[int(r["idx"])]
-            for tipo, valor in r["Pendientes Alta"]:
-                pendientes.append({
-                    "Periodo": limpiar_clave_texto(fila.get("Periodo")),
-                    "SUBJ": sin_espacios(fila.get("Subject")),
-                    "COURSE": sin_espacios(fila.get("Course")),
-                    "Materia": limpiar_clave_texto(fila.get("Nombre de la Materia")),
-                    "Configuración": tipo, "Valor": valor,
-                    "Responsable": responsable_normalizado(fila.get("Responsable")),
-                    "Archivo": fila.get("ArchivoOrigen", "")
-                })
-        columnas = ["Periodo", "SUBJ", "COURSE", "Materia", "Configuración", "Valor", "Responsable", "Archivo"]
-        return pd.DataFrame(pendientes, columns=columnas)
+            for tipo, horario, metodo, detalle in r["Pendientes Alta"]:
+                registros.append({"Periodo": limpiar_clave_texto(fila.get("Periodo")),
+                    "SUBJ": sin_espacios(fila.get("Subject")), "COURSE": sin_espacios(fila.get("Course")),
+                    "Materia": limpiar_clave_texto(fila.get("Nombre de la Materia")), "Configuración": tipo,
+                    "Tipo de Horario": horario, "Método Educativo": metodo,
+                    "Modo de Calificar": detalle if tipo == "Modo de Calificar" else sin_espacios(fila.get("Modo de Calificar")),
+                    "Motivo": detalle if tipo != "Modo de Calificar" else "Modo de calificar no registrado",
+                    "Responsable": responsable_normalizado(fila.get("Responsable")), "Archivo": fila.get("ArchivoOrigen", "")})
+        return pd.DataFrame(registros, columns=columnas)
 
     # 6. VALIDACIÓN INTELIGENTE
     if files_altas and file_cat_ext and st.button("⚡ Ejecutar Validación Inteligente", type="primary",
@@ -659,8 +713,8 @@ with tab1:
         st.divider()
         if not pendientes.empty:
             st.subheader("📚 Configuraciones pendientes de alta")
-            resumen_altas = pendientes.drop_duplicates(subset=["SUBJ", "COURSE", "Configuración", "Valor"])
-            resumen_altas = resumen_altas.sort_values(["SUBJ", "COURSE", "Configuración", "Valor"])
+            resumen_altas = pendientes.drop_duplicates(subset=["SUBJ", "COURSE", "Configuración", "Tipo de Horario", "Método Educativo", "Modo de Calificar"])
+            resumen_altas = resumen_altas.sort_values(["SUBJ", "COURSE", "Configuración"])
             st.warning(f"Se encontraron {len(resumen_altas)} configuraciones por dar de alta.")
 
             with st.expander("👀 Ver configuraciones pendientes", expanded=True):
@@ -690,45 +744,36 @@ with tab1:
         else:
             st.success("No hay configuraciones pendientes de alta.")
 
-        # 7.2 MESA DE CONTROL: SOLO SI HAY CORRECCIONES
+        # 7.2 UNA SOLA MESA DE CONTROL; SOLO ERRORES QUE REQUIEREN CORRECCIÓN
         corregibles = auditoria[auditoria["Requiere Corrección"] == True].copy()
         if not corregibles.empty:
-            st.subheader("⚖️ Mesa de Control — Correcciones necesarias")
+            st.subheader("⚖️ Mesa de Control — Revisión unificada")
+            st.caption("Las combinaciones pendientes de alta se muestran arriba y no se reemplazan automáticamente.")
+            columnas_editor = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Subj Original",
+                "Crse Original", "Subj Sugerido", "Crse Sugerido", "Comentario Nombres",
+                "Horario Original", "Horario Sugerido", "Método Original", "Método Sugerido",
+                "Comentario Horario", "Modo de Calificar Original", "Modo de Calificar Sugerido",
+                "Comentario Modo de Calificar"]
+            bloqueadas = ["Materia Excel", "Materia Catálogo", "Subj Original", "Crse Original",
+                "Comentario Nombres", "Horario Original", "Método Original", "Comentario Horario",
+                "Modo de Calificar Original", "Comentario Modo de Calificar"]
             for archivo in corregibles["Archivo"].unique():
                 sub = corregibles[corregibles["Archivo"] == archivo]
                 with st.expander(f"⚠️ {archivo} — {len(sub)} registros", expanded=True):
                     with st.form(f"revision_{hashlib.md5(archivo.encode()).hexdigest()[:10]}"):
-                        t1, t2 = st.tabs(["Nombres y Claves", "Horarios y Métodos"])
-                        cols_nom = ["Luz Verde", "Materia Excel", "Materia Catálogo", "Comentario Nombres",
-                                    "Subj Original", "Crse Original", "Subj Sugerido", "Crse Sugerido"]
-                        cols_met = ["Luz Verde", "Materia Excel", "Horario Original", "Horario Sugerido",
-                                    "Comentario Horario", "Método Original", "Método Sugerido",
-                                    "Comentario Método", "Modo de Calificar Original",
-                                    "Modo de Calificar Sugerido", "Comentario Modo de Calificar"]
-
-                        with t1:
-                            nom = st.data_editor(sub[cols_nom], hide_index=True, use_container_width=True,
-                                                 disabled=["Materia Excel", "Materia Catálogo", "Comentario Nombres",
-                                                           "Subj Original", "Crse Original"],
-                                                 key=f"nom_t1_{archivo}_{st.session_state.t1_version_editor}")
-                        with t2:
-                            met = st.data_editor(sub[cols_met], hide_index=True, use_container_width=True,
-                                                 disabled=["Materia Excel", "Horario Original", "Comentario Horario",
-                                                           "Método Original", "Comentario Método",
-                                                           "Modo de Calificar Original", "Comentario Modo de Calificar"],
-                                                 key=f"met_t1_{archivo}_{st.session_state.t1_version_editor}")
-
-                        if st.form_submit_button("💾 Guardar correcciones", use_container_width=True):
-                            for i in sub.index:
-                                auditoria.at[i, "Luz Verde"] = bool(nom.at[i, "Luz Verde"] or met.at[i, "Luz Verde"])
-                                for c in ["Subj Sugerido", "Crse Sugerido"]: auditoria.at[i, c] = nom.at[i, c]
-                                for c in ["Horario Sugerido", "Método Sugerido", "Modo de Calificar Sugerido"]:
-                                    auditoria.at[i, c] = met.at[i, c]
-                            st.session_state.res_auditoria = auditoria
-                            st.session_state.zip_solicitudes_csv_altas = None
-                            st.session_state.t1_version_editor += 1
-                            st.success("Correcciones guardadas.")
-                            st.rerun()
+                        editado = st.data_editor(sub[columnas_editor], hide_index=True, use_container_width=True,
+                            disabled=bloqueadas, key=f"t1_editor_{hashlib.md5(archivo.encode()).hexdigest()[:10]}_{st.session_state.t1_version_editor}")
+                        guardar = st.form_submit_button("💾 Guardar correcciones", use_container_width=True)
+                    if guardar:
+                        for i in sub.index:
+                            auditoria.at[i, "Luz Verde"] = bool(editado.at[i, "Luz Verde"])
+                            for c in ["Subj Sugerido", "Crse Sugerido", "Horario Sugerido",
+                                      "Método Sugerido", "Modo de Calificar Sugerido"]:
+                                auditoria.at[i, c] = editado.at[i, c]
+                        st.session_state.res_auditoria = auditoria
+                        st.session_state.zip_solicitudes_csv_altas = None
+                        st.session_state.t1_version_editor += 1
+                        st.rerun()
 
         # 7.3 ADVERTENCIAS
         if avisos_pa:
@@ -804,20 +849,23 @@ with tab1:
 
         # 10. GENERAR SOLICITUDES + CSV_ALTAS
         st.divider()
-        st.subheader("📁 Nombres de SOLICITUDES (según contenido de ALTAS)")
+        st.subheader("📁 Separación de CSV_ALTAS y Excel")
+        modo_separacion = st.radio("¿Cómo deseas separar los archivos?", MODOS_SEPARACION,
+            index=3, horizontal=True, key="t1_modo_separacion")
+        st.caption("La misma separación aplica a los CSV y a los Excel normales. Las secciones ya se asignaron globalmente.")
+        if st.session_state.get("t1_modo_generado") != modo_separacion:
+            st.session_state.zip_solicitudes_csv_altas = None
+        st.subheader("📋 Vista previa de archivos")
         try:
             vista, _ = construir_altas_corregidas()
             previstos, usados = [], set()
-            for origen, grupo in vista.groupby("ArchivoOrigen", sort=False):
-                extension = ".xlsm" if origen.lower().endswith(".xlsm") else ".xlsx"
-                nombre = nombre_solicitud(grupo, extension)
-                final, n = nombre, 2
-                while final.casefold() in usados:
-                    final = f"{nombre[:-len(extension)]} ({n}){extension}"
-                    n += 1
-                usados.add(final.casefold())
-                previstos.append({"Archivo recibido": origen, "Nombre SOLICITUDES": final})
+            for _, grupo in grupos_exportacion_altas(vista, modo_separacion):
+                nombre_csv = nombre_csv_grupo_altas(grupo)
+                nombre_excel = nombre_solicitud(grupo, ".xlsx") if modo_separacion != "Sin separar" else "—"
+                previstos.append({"Origen": ", ".join(grupo["ArchivoOrigen"].unique()),
+                    "CSV_ALTAS": nombre_csv, "Excel normal": nombre_excel, "Registros": len(grupo)})
             st.dataframe(pd.DataFrame(previstos), hide_index=True, use_container_width=True)
+            st.caption("Los .xlsm originales solo se entregarán renombrados cuando su nombre no corresponda al contenido.")
         except Exception as e:
             st.warning(f"No se pudieron calcular los nombres: {e}")
         if st.button("💾 Generar SOLICITUDES y CSV_ALTAS", type="primary",
@@ -839,8 +887,9 @@ with tab1:
 
                 with st.spinner("Generando SOLICITUDES y CSV_ALTAS..."):
                     zip_final = generar_zip_altas(corregido, st.session_state.original_files_bytes,
-                                                  preparar_csv_banner)
+                                                  preparar_csv_banner, modo_separacion=modo_separacion)
                 st.session_state.zip_solicitudes_csv_altas = zip_final
+                st.session_state.t1_modo_generado = modo_separacion
                 st.success("SOLICITUDES y CSV_ALTAS generados correctamente.")
             except Exception as e:
                 st.session_state.zip_solicitudes_csv_altas = None
