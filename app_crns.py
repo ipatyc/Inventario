@@ -207,40 +207,45 @@ def nombre_csv_altas(periodo, responsable, cluster):
 # ============================================================
 # 5. CATÁLOGO PA OPCIONAL
 # ============================================================
-def leer_csv_pa(archivo):
-    datos = archivo.getvalue() if hasattr(archivo, "getvalue") else archivo
-    df = None
-    for enc in ("utf-8-sig", "utf-8", "cp1252"):
-        try:
-            df = pd.read_csv(io.BytesIO(datos), dtype=str, encoding=enc, sep=None,
-                             engine="python", keep_default_na=False)
-            break
-        except (UnicodeError, pd.errors.ParserError):
-            continue
-    if df is None: raise ValueError("No se pudo leer el catálogo PA.")
-
-    df.columns = [normalizar_para_busqueda(str(c).replace("Ã", "A").replace("Ã¡", "a")) for c in df.columns]
-    requeridas = ["periodo", "area", "nocurso", "grupo", "nrc"]
-    faltantes = [c for c in requeridas if c not in df.columns]
-    if faltantes: raise ValueError(f"PA: faltan columnas {faltantes}")
-
-    pa = df.copy()
-    for c in ["periodo", "area", "nocurso", "nrc"]: pa[c] = pa[c].apply(normalizar_para_cruce)
-    pa["grupo"] = pa["grupo"].apply(clave_seccion)
-    pa = pa[pa["nrc"].ne("")].copy()
-
-    llaves = ["periodo", "area", "nocurso", "grupo"]
-    conflictos = pa.groupby("nrc")[llaves].nunique(dropna=False).gt(1).any(axis=1)
-    nrc_conflictivos = set(conflictos[conflictos].index)
-
-    pa_unica = pa.drop_duplicates(subset=["nrc"])
-    pa_reserva = pd.concat([
-        pa_unica[~pa_unica["nrc"].isin(nrc_conflictivos)],
-        pa[pa["nrc"].isin(nrc_conflictivos)]
-    ]).drop_duplicates(subset=["nrc"] + llaves)
-
-    advertencias = [{"Tipo": "PA", "Detalle": f"NRC {nrc} presenta registros contradictorios."}
-                    for nrc in sorted(nrc_conflictivos)]
+def leer_csv_pa(archivos):
+    # Acepta un CSV, una lista de CSV o None. La identidad es PERIODO + NRC.
+    if archivos is None: return None, []
+    if not isinstance(archivos, (list, tuple)): archivos = [archivos]
+    if not archivos: return None, []
+    partes = []
+    for archivo in archivos:
+        nombre = getattr(archivo, "name", "PA")
+        datos = archivo.getvalue() if hasattr(archivo, "getvalue") else archivo
+        tabla = None
+        for enc in ("utf-8-sig", "utf-8", "cp1252"):
+            try:
+                tabla = pd.read_csv(io.BytesIO(datos), dtype=str, encoding=enc, sep=None,
+                                    engine="python", keep_default_na=False)
+                break
+            except (UnicodeError, pd.errors.ParserError): continue
+        if tabla is None: raise ValueError(f"No se pudo leer la PA: {nombre}")
+        tabla.columns = [normalizar_para_busqueda(str(c).replace("Ã", "A").replace("Ã¡", "a")) for c in tabla.columns]
+        requeridas = ["periodo", "area", "nocurso", "grupo", "nrc"]
+        faltantes = [c for c in requeridas if c not in tabla.columns]
+        if faltantes: raise ValueError(f"{nombre}: faltan columnas PA {faltantes}")
+        tabla = tabla[requeridas].copy()
+        for c in ("periodo", "area", "nocurso", "nrc"): tabla[c] = tabla[c].apply(normalizar_para_cruce)
+        tabla["grupo"] = tabla["grupo"].apply(clave_seccion)
+        tabla = tabla[tabla["nrc"].ne("") & tabla["periodo"].ne("")].copy()
+        partes.append(tabla)
+    pa = pd.concat(partes, ignore_index=True)
+    if pa.empty: return pa, []
+    # Los mismos NRC en periodos distintos son independientes.
+    # Si un PERIODO+NRC tiene datos contradictorios, reservar todas las secciones
+    # asociadas, sin seleccionar silenciosamente una de ellas.
+    detalle = ["area", "nocurso", "grupo"]
+    conflictos = pa.groupby(["periodo", "nrc"], sort=False)[detalle].nunique(dropna=False).gt(1).any(axis=1)
+    advertencias = [
+        {"Tipo": "PA", "Periodo": periodo, "NRC": nrc,
+         "Detalle": f"Periodo {periodo}, NRC {nrc}: registros contradictorios; se reservan las secciones reportadas."}
+        for (periodo, nrc) in conflictos[conflictos].index
+    ]
+    pa_reserva = pa.drop_duplicates(subset=["periodo", "nrc"] + detalle).reset_index(drop=True)
     return pa_reserva, advertencias
 
 # ============================================================
@@ -516,13 +521,13 @@ with tab1:
     st.subheader("📁 Archivos de entrada")
     c1, c2, c3 = st.columns(3)
     file_cat_ext = c1.file_uploader("📚 Catálogo Avanzado (SCBCRSE)", type=["csv", "xlsx"], key="cat_ext_t1")
-    file_pa = c2.file_uploader("📊 Catálogo PA (Opcional)", type=["csv"], key="pa_t1")
+    files_pa = c2.file_uploader("📊 Catálogos PA (Opcionales, varios periodos)", type=["csv"], accept_multiple_files=True, key="pa_t1")
     files_altas = c3.file_uploader("📁 Archivos ALTAS", type=["xlsx", "xlsm"], accept_multiple_files=True, key="altas_t1")
-    st.caption("Las restricciones son internas. La PA es opcional y los Excel pueden contener macros.")
+    st.caption("Puedes cargar una PA por periodo o un único CSV que contenga varios periodos. La PA es opcional; si falta un periodo se mostrará una advertencia.")
 
     # Invalidar resultados cuando cambien los archivos.
     firma_actual = tuple((f.name, hashlib.sha256(f.getvalue()).hexdigest())
-                         for f in ([file_cat_ext, file_pa] + list(files_altas or [])) if f is not None)
+                         for f in ([file_cat_ext] + list(files_pa or []) + list(files_altas or [])) if f is not None)
     if st.session_state.get("t1_firma_archivos") != firma_actual:
         for k in ["raw_altas", "res_auditoria", "cat_pa_cache", "advertencias_pa",
                   "errores_restricciones", "df_secciones_corregidas", "errores_secciones",
@@ -644,7 +649,7 @@ with tab1:
             with st.spinner("Revisando materias, configuraciones y secciones..."):
                 catalogo = cargar_catalogo_avanzado()
                 if not catalogo: raise ValueError("El Catálogo Avanzado no contiene materias válidas.")
-                pa, avisos = leer_csv_pa(file_pa) if file_pa else (None, [])
+                pa, avisos = leer_csv_pa(files_pa) if files_pa else (None, [])
                 piezas, errores_archivo, originales = [], [], {}
 
                 for archivo in files_altas:
@@ -673,6 +678,13 @@ with tab1:
                 if not piezas: raise ValueError("No se encontraron registros ALTAS.")
 
                 total = pd.concat(piezas, ignore_index=True)
+                # La cobertura se comprueba por PERIODO, nunca solo por NRC.
+                periodos_altas = {normalizar_para_cruce(p) for p in total["Periodo"] if limpiar_clave_texto(p)}
+                periodos_pa = {normalizar_para_cruce(p) for p in pa["periodo"]} if pa is not None else set()
+                sin_pa = sorted(periodos_altas - periodos_pa)
+                for periodo_faltante in sin_pa:
+                    avisos.append({"Tipo": "PA sin cobertura", "Periodo": periodo_faltante,
+                                  "Detalle": f"No se cargó PA del periodo {periodo_faltante}. Las secciones se asignarán sin conocer las ocupadas en Banner."})
                 total["Responsable"] = total["Responsable"].apply(responsable_normalizado)
                 auditoria = []
                 for i, fila in total.iterrows():
@@ -777,7 +789,7 @@ with tab1:
 
         # 7.3 ADVERTENCIAS
         if avisos_pa:
-            st.subheader("⚠️ Advertencias PA")
+            st.subheader("⚠️ Advertencias PA y periodos sin cobertura")
             st.dataframe(pd.DataFrame(avisos_pa), hide_index=True, use_container_width=True)
 
         if isinstance(errores_reglas, pd.DataFrame) and not errores_reglas.empty:
