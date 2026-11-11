@@ -1256,8 +1256,8 @@ with tab_err:
 with tab3:
     st.header("📊 Inyección de NRCs y Cruces con ARGOS")
     if st.button("🔄 Limpiar / Recomenzar", key="limpiar_t3"):
-        claves = ["t3_modo", "t3_argos_completo", "t3_csv_completo", "t3_excel_completo", "t3_argos_rapido", "t3_csv_rapido", "final_argos_zip", "df_cruce_rapido", "t3_alertas", "t3_resultado_editado", "t3_editor_version", "t3_columnas", "t3_firma_completo", "t3_firma_rapido", "t3_tabla_revision", "t3_informe_zip", "t3_diferencias", "t3_match", "t3_firma_revision", "t3_salida", "t3_incluir_original"]
-        claves += [k for k in st.session_state if k.startswith("t3_editor_")]
+        claves = ["t3_modo", "t3_argos_completo", "t3_csv_completo", "t3_excel_completo", "t3_argos_rapido", "t3_csv_rapido", "final_argos_zip", "df_cruce_rapido", "t3_alertas", "t3_resultado_editado", "t3_editor_version", "t3_columnas", "t3_firma_completo", "t3_firma_rapido", "t3_tabla_revision", "t3_informe_zip", "t3_diferencias", "t3_match", "t3_firma_revision", "t3_salida", "t3_incluir_original", "t3_pendientes", "t3_manual_version", "t3_salida_procesada"]
+        claves += [k for k in st.session_state if k.startswith(("t3_editor_", "t3_eleccion_"))]
         for k in claves: st.session_state.pop(k, None)
         st.rerun()
 
@@ -1278,7 +1278,7 @@ with tab3:
         aliases = {"periodo": ["periodo"], "nivel": ["nivel"], "cluster": ["cluster"], "subj": ["area", "rea", "subj"], "crse": ["nocurso", "course", "crse"], "grupo": ["grupo", "seccion"], "nrc": ["nrc", "crn"], "sede": ["campus", "sede"]}
         columnas = {k: next((huellas[a] for a in opciones if a in huellas), None) for k, opciones in aliases.items()}
         faltantes = [k for k in ("periodo", "nivel", "cluster", "subj", "crse", "grupo", "nrc") if columnas[k] is None]
-        if faltantes: raise ValueError(f"ARGOS: faltan columnas {faltantes}.")
+        if faltantes: raise ValueError(f"El archivo {archivo.name} no es un reporte ARGOS/PA válido. Faltan {faltantes}. Carga el reporte de oferta con NRC, Nivel, Cluster, Periodo, Área, No. Curso y Grupo; no el CSV_ALTAS de Banner.")
         if df.columns.duplicated().any(): raise ValueError("ARGOS tiene encabezados duplicados.")
         for campo, col in columnas.items():
             df[f"_{campo}"] = df[col].apply(ultra_limpiar_seccion if campo == "grupo" else ultra_limpiar) if col else ""
@@ -1371,6 +1371,7 @@ with tab3:
         d = d.drop_duplicates(subset=["_periodo", "_nrc"] + campos)
         d["_llave"] = d[["_periodo", "_nivel", "_cluster", "_subj", "_crse", "_grupo"]].agg("_".join, axis=1)
         mapa = d.groupby("_llave")["_nrc"].agg(lambda x: sorted(set(x))).to_dict()
+        if conflictos.any(): raise ValueError("ARGOS/PA contiene NRC contradictorios dentro de un mismo periodo. Revisa las advertencias y los reportes antes de generar.")
         return d, mapa, avisos
 
     def t3_leer_excels(archivos):
@@ -1405,35 +1406,47 @@ with tab3:
         return iguales, periodo_igual
 
     def t3_proponer(excel, csv):
-        # Primera pasada: coincidencia exacta de todos los campos disponibles, unica.
-        pendientes = set(csv.index)
-        asignadas, motivos = {}, {}
+        # Exactas unicas primero. Las otras son propuestas, nunca asignaciones arbitrarias.
+        pendientes, asignadas, motivos = set(csv.index), {}, {}
         campos = ["PERIODO", "SUBJ", "COURSE", "SEDE", "PARTE_PERIODO", "STATUS", "CAPACIDAD", "SECCION", "TIPO_HORARIO", "METODO_EDUCATIVO", "MODO_CALIFICAR", "SESION"]
         def firma_ex(r): return tuple(t3_n(r[c], c) for c in campos)
         def firma_csv(r): return tuple(t3_n(r[T3_MAPA[c]], c) for c in campos)
-        grupos_ex, grupos_csv = {}, {}
-        for i, r in excel.iterrows(): grupos_ex.setdefault(firma_ex(r), []).append(i)
-        for j, r in csv.iterrows(): grupos_csv.setdefault(firma_csv(r), []).append(j)
-        for k, ie in grupos_ex.items():
-            jc = grupos_csv.get(k, [])
-            if len(ie) == len(jc) == 1:
-                asignadas[ie[0]], motivos[ie[0]] = jc[0], "Exacta"
+        gx, gc = {}, {}
+        for i, r in excel.iterrows(): gx.setdefault(firma_ex(r), []).append(i)
+        for j, r in csv.iterrows(): gc.setdefault(firma_csv(r), []).append(j)
+        for k, ix in gx.items():
+            jc = gc.get(k, [])
+            if len(ix) == len(jc) == 1:
+                asignadas[ix[0]], motivos[ix[0]] = jc[0], "Exacta"
                 pendientes.discard(jc[0])
-        # Segunda pasada: orden dentro de cada periodo, responsable/cluster cuando se conocen.
-        # Solo sugerencias, nunca confirmacion automatica.
+        # Aplicar automaticamente solo una diferencia cuando el emparejamiento sea mutuo y unico.
+        pendientes_excel = [i for i in excel.index if i not in asignadas]
+        candidaturas = {}
+        for i in pendientes_excel:
+            r = excel.loc[i]
+            opciones = []
+            for j in sorted(pendientes):
+                c = csv.loc[j]
+                puntos, mismo_periodo = t3_similares(r, c)
+                if not mismo_periodo or puntos < len(campos) - 1: continue
+                cl, cc = t3_n(r.get("CLUSTER", "")), t3_n(c.get("datocomplementario", ""))
+                if cl and cc and cl != cc and not (t3_n(r.get("NIVEL", "")) == "BACHILLERATO" and cc == "BACHILLERATO"): continue
+                opciones.append(j)
+            candidaturas[i] = opciones
+        for i, js in candidaturas.items():
+            if len(js) == 1 and sum(js[0] in otros for otros in candidaturas.values()) == 1:
+                asignadas[i], motivos[i] = js[0], "Una diferencia, correspondencia unica"
+                pendientes.discard(js[0])
         propuestas = []
         for i, r in excel.iterrows():
             if i in asignadas: continue
             candidatos = []
-            for j in pendientes:
+            for j in sorted(pendientes):
                 c = csv.loc[j]
                 puntaje, mismo_periodo = t3_similares(r, c)
                 if not mismo_periodo: continue
-                # Si ambos tienen cluster explicito, deben ser iguales; Banner Bachillerato puede tener alias.
-                cl = t3_n(r.get("CLUSTER", ""))
-                cc = t3_n(c.get("datocomplementario", ""))
-                if cl and cc and cl != cc and not (t3_n(r.get("NIVEL", "")) == "BACHILLERATO" and cc == "BACHILLERATO"):
-                    continue
+                cl, cc = t3_n(r.get("CLUSTER", "")), t3_n(c.get("datocomplementario", ""))
+                if cl and cc and cl != cc and not (t3_n(r.get("NIVEL", "")) == "BACHILLERATO" and cc == "BACHILLERATO"): continue
                 candidatos.append((puntaje, j))
             candidatos.sort(key=lambda x: (-x[0], x[1]))
             mejor = candidatos[0][0] if candidatos else 0
@@ -1479,122 +1492,132 @@ with tab3:
             formatear_excel_t3(writer.sheets["CRNs_Finales"])
         return b.getvalue()
 
-    # 4. MODO COMPLETO: comparar, revisar, corregir y finalmente recuperar NRC.
+    # 4. MODO COMPLETO: un boton principal; revision solo cuando es necesaria.
     if modo.startswith("📦"):
-        st.subheader("📦 Conciliacion Excel - CSV - ARGOS")
+        st.subheader("📦 Conciliación Excel - CSV - ARGOS")
         c1, c2, c3 = st.columns(3)
-        argos = c1.file_uploader("ARGOS / PA por periodo (.csv)", type=["csv"], accept_multiple_files=True, key="t3_argos_completo")
+        argos = c1.file_uploader("ARGOS / PA actualizado con NRC (.csv)", type=["csv"], accept_multiple_files=True, key="t3_argos_completo")
         archivos_csv = c2.file_uploader("CSV definitivos de Banner", type=["csv"], accept_multiple_files=True, key="t3_csv_completo")
         archivos_excel = c3.file_uploader("Excel ALTAS originales o separados", type=["xlsx", "xlsm"], accept_multiple_files=True, key="t3_excel_completo")
-        opciones = {"Como venian originalmente": [], "Por periodo": ["PERIODO"], "Por cluster": ["CLUSTER"], "Por responsable": ["RESPONSABLE"], "Por periodo y cluster": ["PERIODO", "CLUSTER"], "Por periodo y responsable": ["PERIODO", "RESPONSABLE"], "Por cluster y responsable": ["CLUSTER", "RESPONSABLE"], "Por periodo, cluster y responsable": ["PERIODO", "CLUSTER", "RESPONSABLE"]}
-        salida = st.selectbox("Separacion de Excel finales", list(opciones), key="t3_salida")
-        incluir_original = st.checkbox("Incluir tambien los Excel como venian originalmente", value=False, key="t3_incluir_original")
+        opciones = {"Como venían originalmente": [], "Por periodo": ["PERIODO"], "Por clúster": ["CLUSTER"], "Por responsable": ["RESPONSABLE"], "Por periodo y clúster": ["PERIODO", "CLUSTER"], "Por periodo y responsable": ["PERIODO", "RESPONSABLE"], "Por clúster y responsable": ["CLUSTER", "RESPONSABLE"], "Por periodo, clúster y responsable": ["PERIODO", "CLUSTER", "RESPONSABLE"]}
+        salida = st.selectbox("¿Cómo deseas recibir los Excel finales?", list(opciones), key="t3_salida")
         firma = firma_t3(*(argos or []), *(archivos_csv or []), *(archivos_excel or []))
         if st.session_state.get("t3_firma_completo") != firma:
-            for k in ("t3_match", "t3_tabla_revision", "final_argos_zip", "t3_alertas"):
+            for k in ("t3_match", "t3_tabla_revision", "final_argos_zip", "t3_alertas", "t3_diferencias", "t3_pendientes"):
                 st.session_state.pop(k, None)
             st.session_state.t3_firma_completo = firma
-        if argos and archivos_csv and archivos_excel and st.button("1. Comparar Excel y CSV", type="primary", key="t3_comparar", use_container_width=True):
+            st.session_state.t3_manual_version = st.session_state.get("t3_manual_version", 0) + 1
+        if st.session_state.get("t3_salida_procesada") != salida:
+            st.session_state.final_argos_zip = None
+
+        def t3_exportar(datos, argos_df, mapa):
+            excel, csv, asignadas = datos["excel"], datos["csv"], datos["asignadas"]
+            final, diferencias = t3_generar_resultado(excel, csv, asignadas, argos_df, mapa)
+            st.session_state.t3_diferencias = diferencias
+            grupos = [(k, g) for k, g in final.groupby(opciones[salida], sort=False, dropna=False)] if opciones[salida] else [(k, g) for k, g in final.groupby("_ArchivoExcel", sort=False)]
+            b, rutas, macros_corregidas = io.BytesIO(), set(), 0
+            with zipfile.ZipFile(b, "w", zipfile.ZIP_DEFLATED) as z:
+                for _, grupo in grupos:
+                    nombre = t3_nombre_grupo(grupo)
+                    z.writestr(ruta_zip_unica("CRNS_FINALES_SIN_MACROS", nombre, rutas), t3_excel_bytes(grupo))
+                # Solo entregar el XLSM si realmente hay cambios frente al CSV.
+                for f in archivos_excel:
+                    if not f.name.lower().endswith(".xlsm"): continue
+                    g = final[final["_ArchivoExcel"] == f.name]
+                    cambios = diferencias[diferencias["Archivo Excel"] == f.name] if not diferencias.empty else pd.DataFrame()
+                    if g.empty or cambios.empty: continue
+                    wb = openpyxl.load_workbook(io.BytesIO(f.getvalue()), keep_vba=True)
+                    hoja = next((h for h in wb.sheetnames if h.strip().upper() == HOJA_ALTAS), None)
+                    if hoja is None: raise ValueError(f"{f.name}: no tiene hoja ALTAS.")
+                    ws = wb[hoja]
+                    encabezados = {normalizar_para_busqueda(c.value): c.column for c in ws[1] if c.value is not None}
+                    # Solo cambiar los campos realmente distintos; preservar los otros y el VBA.
+                    for _, cambio in cambios.iterrows():
+                        campo = cambio["Campo"]
+                        col = next((encabezados[a] for a in T3_ALIAS.get(campo, []) if a in encabezados), None)
+                        if col is not None: ws.cell(int(cambio["Fila Excel"]), col).value = cambio["Definitivo"]
+                    if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
+                    wsn = wb.create_sheet(HOJA_SALIDA_NRC)
+                    wsn.append(["Fila ALTAS"] + T3_COLUMNAS_FINAL)
+                    for _, reg in g.iterrows(): wsn.append([int(reg["_FilaExcel"])] + [reg[c] for c in T3_COLUMNAS_FINAL])
+                    formatear_excel_t3(wsn)
+                    buf = io.BytesIO()
+                    wb.save(buf)
+                    nombre = f.name.rsplit(".", 1)[0] + " CRNs Corregidos.xlsm"
+                    z.writestr(ruta_zip_unica("MACROS_CORREGIDAS", nombre, rutas), buf.getvalue())
+                    macros_corregidas += 1
+            st.session_state.final_argos_zip = b.getvalue()
+            st.session_state.t3_salida_procesada = salida
+            st.success(f"Listo: {len(grupos)} Excel finales, {len(diferencias)} cambios desde CSV y {macros_corregidas} libros con macros corregidos.")
+
+        if argos and archivos_csv and archivos_excel and st.button("🚀 Procesar y generar Excel finales con NRC", type="primary", key="t3_procesar", use_container_width=True):
             try:
-                excel = t3_leer_excels(archivos_excel)
-                partes = []
-                for f in archivos_csv:
-                    d = leer_csv_t3(f)
-                    d["_ArchivoCSV"], d["_FilaCSV"] = f.name, range(2, len(d) + 2)
-                    partes.append(d)
-                csv = pd.concat(partes, ignore_index=True)
-                if len(excel) != len(csv): raise ValueError(f"Excel: {len(excel)} registros; CSV: {len(csv)}. Deben coincidir antes de relacionar filas.")
-                asignadas, motivos, propuestas = t3_proponer(excel, csv)
-                st.session_state.t3_match = {"excel": excel, "csv": csv, "asignadas": asignadas, "motivos": motivos}
-                st.session_state.t3_tabla_revision = propuestas
+                with st.spinner("Comparando Excel, CSV y recuperando NRC..."):
+                    argos_df, mapa, avisos = t3_argos_unidos(argos)
+                    excel = t3_leer_excels(archivos_excel)
+                    partes = []
+                    for f in archivos_csv:
+                        d = leer_csv_t3(f)
+                        d["_ArchivoCSV"], d["_FilaCSV"] = f.name, range(2, len(d) + 2)
+                        partes.append(d)
+                    csv = pd.concat(partes, ignore_index=True)
+                    if len(excel) != len(csv): raise ValueError(f"Excel: {len(excel)} registros; CSV: {len(csv)}. Revisa que hayas cargado todos los CSV correspondientes, sin duplicarlos.")
+                    asignadas, motivos, propuestas = t3_proponer(excel, csv)
+                    datos = {"excel": excel, "csv": csv, "asignadas": asignadas, "motivos": motivos}
+                    st.session_state.t3_match = datos
+                    st.session_state.t3_tabla_revision = propuestas
+                    st.session_state.t3_alertas = avisos
+                    st.session_state.final_argos_zip = None
+                    if len(asignadas) == len(excel): t3_exportar(datos, argos_df, mapa)
+                    else: st.warning(f"Se encontraron {len(asignadas)} coincidencias exactas y {len(excel)-len(asignadas)} registros para confirmar. Revisa las correspondencias que aparecen abajo.")
+            except Exception as e:
                 st.session_state.final_argos_zip = None
-                st.success(f"{len(asignadas)} coincidencias exactas. {len(propuestas)} filas requieren revision.")
-            except Exception as e: st.error(f"Error de comparacion: {e}")
+                st.error(f"No se pudo procesar: {e}")
+
         datos = st.session_state.get("t3_match")
-        if datos:
+        if datos and len(datos["asignadas"]) < len(datos["excel"]):
             excel, csv = datos["excel"], datos["csv"]
-            asignadas = dict(datos["asignadas"])
             propuestas = st.session_state.get("t3_tabla_revision")
-            if isinstance(propuestas, pd.DataFrame) and not propuestas.empty:
-                st.subheader("Correspondencias pendientes")
-                st.caption("Selecciona la fila CSV correcta. La sugerencia es orientativa; no se aplica sin confirmacion.")
-                usados = set(asignadas.values())
+            st.subheader("⚠️ Revisar correspondencias pendientes")
+            st.caption("Solo aparecen cuando no es posible identificar una fila con certeza. El CSV definitivo será la referencia para las correcciones.")
+            asignadas = dict(datos["asignadas"])
+            usados = set(asignadas.values())
+            with st.form("t3_form_correspondencias"):
+                elecciones = {}
                 for _, r in propuestas.iterrows():
                     i = int(r["Fila"])
                     if i in asignadas: continue
                     candidatos = [j for j in csv.index if j not in usados and t3_n(csv.loc[j, "PERIODO"]) == t3_n(excel.loc[i, "PERIODO"])]
-                    etiquetas = {j: f'{csv.loc[j,"_ArchivoCSV"]} | fila {csv.loc[j,"_FilaCSV"]} | {csv.loc[j,"SUBJ"]} {csv.loc[j,"COURSE"]} | seccion {csv.loc[j,"SECCION"]}' for j in candidatos}
-                    if not candidatos:
-                        st.error(f'{r["Archivo Excel"]}, fila {r["Fila Excel"]}: no quedan candidatos del mismo periodo.')
-                        continue
+                    cl = t3_n(excel.loc[i].get("CLUSTER", ""))
+                    if cl:
+                        candidatos = [j for j in candidatos if t3_n(csv.loc[j, "datocomplementario"]) == cl or (t3_n(excel.loc[i].get("NIVEL", "")) == "BACHILLERATO" and t3_n(csv.loc[j, "datocomplementario"]) == "BACHILLERATO")]
+                    etiquetas = {j: f'{csv.loc[j,"_ArchivoCSV"]} | fila {csv.loc[j,"_FilaCSV"]} | {csv.loc[j,"SUBJ"]} {csv.loc[j,"COURSE"]} | sección {csv.loc[j,"SECCION"]}' for j in candidatos}
                     sugerido = int(r["CSV sugerido"])
-                    seleccion = st.selectbox(f'{r["Archivo Excel"]} - fila {r["Fila Excel"]} - {r["Materia Excel"]} - seccion {r["Seccion Excel"]}', [-1] + candidatos, index=([-1] + candidatos).index(sugerido) if sugerido in candidatos else 0, format_func=lambda j: "-- Seleccionar CSV --" if j == -1 else etiquetas[j], key=f"t3_match_{i}")
-                    if seleccion != -1:
-                        if seleccion in usados: st.error("Esta fila CSV ya fue asignada.")
-                        else:
-                            asignadas[i] = seleccion
-                            usados.add(seleccion)
-                if st.button("Guardar correspondencias", key="t3_guardar_match", use_container_width=True):
-                    if len(asignadas) != len(excel): st.warning(f"Faltan {len(excel)-len(asignadas)} correspondencias.")
-                    else:
-                        datos["asignadas"] = asignadas
-                        st.session_state.t3_match = datos
-                        st.session_state.t3_tabla_revision = pd.DataFrame()
-                        st.session_state.final_argos_zip = None
-                        st.rerun()
-            if len(datos["asignadas"]) == len(excel):
-                st.success("Correspondencias completas. Puedes generar los NRC.")
-                if st.button("2. Aplicar CSV y generar Excel con NRC", type="primary", key="t3_generar", use_container_width=True):
-                    try:
-                        argos_df, mapa, avisos = t3_argos_unidos(argos)
-                        final, diferencias = t3_generar_resultado(excel, csv, datos["asignadas"], argos_df, mapa)
-                        st.session_state.t3_alertas = avisos
-                        st.session_state.t3_diferencias = diferencias
-                        grupos = [(k, g) for k, g in final.groupby(opciones[salida], sort=False, dropna=False)] if opciones[salida] else [(k, g) for k, g in final.groupby("_ArchivoExcel", sort=False)]
-                        if incluir_original and opciones[salida]: grupos += [(f"Original {k}", g) for k, g in final.groupby("_ArchivoExcel", sort=False)]
-                        b, rutas = io.BytesIO(), set()
-                        with zipfile.ZipFile(b, "w", zipfile.ZIP_DEFLATED) as z:
-                            for _, grupo in grupos:
-                                nombre = t3_nombre_grupo(grupo)
-                                z.writestr(ruta_zip_unica("CRNS_FINALES_SIN_MACROS", nombre, rutas), t3_excel_bytes(grupo))
-                            # Conservar el libro con macros solo si corresponde a un origen completo.
-                            for f in archivos_excel:
-                                if not f.name.lower().endswith(".xlsm"): continue
-                                g = final[final["_ArchivoExcel"] == f.name]
-                                if g.empty: continue
-                                wb = openpyxl.load_workbook(io.BytesIO(f.getvalue()), keep_vba=True)
-                                hoja = next((h for h in wb.sheetnames if h.strip().upper() == HOJA_ALTAS), None)
-                                if not hoja: continue
-                                ws = wb[hoja]
-                                encabezados = {normalizar_para_busqueda(c.value): c.column for c in ws[1] if c.value is not None}
-                                for _, reg in g.iterrows():
-                                    fila = int(reg["_FilaExcel"])
-                                    for campo, valor in reg.items():
-                                        if campo.startswith("_") or campo == "NRC": continue
-                                        col = next((encabezados[a] for a in T3_ALIAS.get(campo, []) if a in encabezados), None)
-                                        if col is not None: ws.cell(fila, col).value = valor
-                                if HOJA_SALIDA_NRC in wb.sheetnames: del wb[HOJA_SALIDA_NRC]
-                                wsn = wb.create_sheet(HOJA_SALIDA_NRC)
-                                wsn.append(["Fila ALTAS"] + T3_COLUMNAS_FINAL)
-                                for _, reg in g.iterrows(): wsn.append([int(reg["_FilaExcel"])] + [reg[c] for c in T3_COLUMNAS_FINAL])
-                                formatear_excel_t3(wsn)
-                                buf = io.BytesIO()
-                                wb.save(buf)
-                                nombre = f.name.rsplit(".", 1)[0] + "_con_NRC.xlsm"
-                                z.writestr(ruta_zip_unica("SOLICITUDES_CON_NRC", nombre, rutas), buf.getvalue())
-                        st.session_state.final_argos_zip = b.getvalue()
-                        st.success(f"Generados {len(grupos)} Excel normales; {len(diferencias)} diferencias corregidas desde CSV.")
-                    except Exception as e:
-                        st.session_state.final_argos_zip = None
-                        st.error(f"No se pudo generar: {e}")
+                    opciones_fila = [-1] + candidatos
+                    elecciones[i] = st.selectbox(f'{r["Archivo Excel"]}, fila {r["Fila Excel"]} — {r["Materia Excel"]}, sección {r["Seccion Excel"]}', opciones_fila, index=opciones_fila.index(sugerido) if sugerido in candidatos else 0, format_func=lambda j: "-- Seleccionar fila CSV --" if j == -1 else etiquetas[j], key=f't3_eleccion_{st.session_state.t3_manual_version}_{i}')
+                confirmar = st.form_submit_button("💾 Confirmar correspondencias y generar", use_container_width=True)
+            if confirmar:
+                try:
+                    seleccionadas = [j for j in elecciones.values() if j != -1]
+                    if len(seleccionadas) != len(elecciones): raise ValueError("Faltan filas por seleccionar.")
+                    if len(seleccionadas) != len(set(seleccionadas)) or set(seleccionadas) & usados: raise ValueError("Una misma fila CSV no puede asignarse a dos ALTAS.")
+                    asignadas.update(elecciones)
+                    datos["asignadas"] = asignadas
+                    st.session_state.t3_match = datos
+                    argos_df, mapa, avisos = t3_argos_unidos(argos)
+                    st.session_state.t3_alertas = avisos
+                    t3_exportar(datos, argos_df, mapa)
+                    st.rerun()
+                except Exception as e: st.error(f"No se pudo confirmar: {e}")
+
         if isinstance(st.session_state.get("t3_diferencias"), pd.DataFrame) and not st.session_state.t3_diferencias.empty:
-            with st.expander("Correcciones aplicadas desde CSV", expanded=True):
+            with st.expander("Cambios aplicados desde el CSV", expanded=False):
                 st.dataframe(st.session_state.t3_diferencias, hide_index=True, use_container_width=True)
         if st.session_state.get("t3_alertas"):
             with st.expander("Advertencias ARGOS"):
                 st.dataframe(pd.DataFrame(st.session_state.t3_alertas), hide_index=True, use_container_width=True)
         if st.session_state.get("final_argos_zip"):
-            st.download_button("Descargar Excel finales (.ZIP)", st.session_state.final_argos_zip, file_name="CRNs_Finales.zip", mime="application/zip", type="primary", use_container_width=True)
+            st.download_button("📥 Descargar Excel finales (.ZIP)", st.session_state.final_argos_zip, file_name="CRNs_Finales.zip", mime="application/zip", type="primary", use_container_width=True)
 
     # 4. MODO RAPIDO: tabla editable y descarga.
     else:
