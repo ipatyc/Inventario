@@ -1610,7 +1610,7 @@ with tab_err:
 with tab3:
     st.header("📊 Inyección de NRCs y Cruces con ARGOS")
     if st.button("🔄 Limpiar / Recomenzar", key="limpiar_t3"):
-        claves = ["t3_modo", "t3_argos_completo", "t3_csv_completo", "t3_excel_completo", "t3_argos_rapido", "t3_csv_rapido", "final_argos_zip", "df_cruce_rapido", "t3_alertas", "t3_resultado_editado", "t3_editor_version", "t3_columnas", "t3_firma_completo", "t3_firma_rapido", "t3_tabla_revision", "t3_informe_zip", "t3_diferencias", "t3_match", "t3_firma_revision", "t3_salida", "t3_incluir_original", "t3_pendientes", "t3_manual_version", "t3_salida_procesada"]
+        claves = ["t3_modo", "t3_argos_completo", "t3_csv_completo", "t3_excel_completo", "t3_argos_rapido", "t3_csv_rapido", "final_argos_zip", "df_cruce_rapido", "t3_alertas", "t3_resultado_editado", "t3_editor_version", "t3_columnas", "t3_firma_completo", "t3_firma_rapido", "t3_tabla_revision", "t3_informe_zip", "t3_diferencias", "t3_match", "t3_firma_revision", "t3_salida", "t3_incluir_original", "t3_pendientes", "t3_manual_version", "t3_salida_procesada", "t3_nrc_previos", "t3_nrc_pendientes", "t3_nrc_elecciones", "t3_nrc_firma_previos"]
         claves += [k for k in st.session_state if k.startswith(("t3_editor_", "t3_eleccion_"))]
         for k in claves: st.session_state.pop(k, None)
         st.rerun()
@@ -1681,6 +1681,88 @@ with tab3:
                 resultados.append("")
                 alertas.append({"Archivo": nombre, "Fila CSV": i + 2, "PERIODO": fila["PERIODO"], "SUBJ": fila["SUBJ"], "COURSE": fila["COURSE"], "SECCION": fila["SECCION"], "Estado": "Varios NRC" if candidatos else "No encontrado", "NRC candidatos": ", ".join(candidatos), "Busqueda": tipo})
         return pd.Series(resultados, index=df_csv.index, dtype="str"), alertas
+
+    # NRC utilizados en entregas anteriores: se consultan solo cuando hay ambiguedad.
+    def t3_leer_nrc_previos(archivos):
+        usados, detalle = set(), []
+        for archivo in archivos or []:
+            if archivo.name.lower().endswith(".csv"):
+                d = pd.read_csv(io.BytesIO(archivo.getvalue()), dtype=str, encoding="utf-8-sig", keep_default_na=False)
+            else:
+                libro = pd.ExcelFile(io.BytesIO(archivo.getvalue()))
+                hoja = next((h for h in libro.sheet_names if normalizar_para_busqueda_t3(h) in ("crnsfinales", "altas", "crns", "nrcs")), None)
+                if hoja is None:
+                    hoja = next((h for h in libro.sheet_names if "final" in normalizar_para_busqueda_t3(h)), libro.sheet_names[0])
+                d = libro.parse(hoja, dtype=str).fillna("")
+            columnas = {normalizar_para_busqueda_t3(c): c for c in d.columns}
+            cp = next((columnas[k] for k in ("periodo",) if k in columnas), None)
+            cn = next((columnas[k] for k in ("nrc", "crn") if k in columnas), None)
+            if cp is None or cn is None:
+                raise ValueError(f"{archivo.name}: se requieren las columnas PERIODO y NRC.")
+            for _, r in d.iterrows():
+                periodo, nrc = ultra_limpiar(r[cp]), ultra_limpiar(r[cn])
+                if periodo and nrc:
+                    usados.add((periodo, nrc))
+                    detalle.append({"Archivo": archivo.name, "PERIODO": periodo, "NRC": nrc})
+        return usados, pd.DataFrame(detalle)
+
+    def t3_resolver_nrc(df_csv, argos_df, mapa, usados_previos=None, elecciones=None, nombre="CSV definitivo"):
+        # Primero reservar coincidencias unicas; despues resolver las ambiguas.
+        usados_previos = usados_previos or set()
+        elecciones = elecciones or {}
+        llaves = llaves_csv_t3(df_csv)
+        cortas = argos_df.groupby(["_periodo", "_subj", "_crse", "_grupo"])["_nrc"].agg(lambda x: sorted(set(x))).to_dict()
+        registros = []
+        for i, (_, fila) in enumerate(df_csv.iterrows()):
+            periodo = ultra_limpiar(fila["PERIODO"])
+            candidatos = list(mapa.get(llaves.iloc[i], []))
+            busqueda = "Llave completa"
+            if not candidatos:
+                corta = (periodo, ultra_limpiar(fila["SUBJ"]), ultra_limpiar(fila["COURSE"]), ultra_limpiar_seccion(fila["SECCION"]))
+                candidatos = list(cortas.get(corta, []))
+                busqueda = "Llave corta"
+            disponibles = [n for n in candidatos if (periodo, n) not in usados_previos]
+            registros.append({"Indice": i, "Archivo": nombre, "Fila CSV": i + 2, "PERIODO": periodo,
+                              "SUBJ": fila["SUBJ"], "COURSE": fila["COURSE"], "SECCION": fila["SECCION"],
+                              "Nivel": nivel_csv_t3(fila["datocomplementario"]), "NRC candidatos": ", ".join(candidatos),
+                              "Disponibles": disponibles, "Busqueda": busqueda, "_candidatos": candidatos})
+        asignados, ocupados = {}, set()
+        # Las elecciones explicitas se reservan antes de asignar automaticamente.
+        for i, elegido in elecciones.items():
+            i = int(i)
+            if not elegido: continue
+            if i < 0 or i >= len(registros): raise ValueError(f"Indice de eleccion invalido: {i}")
+            r = registros[i]
+            par = (r["PERIODO"], str(elegido))
+            if str(elegido) not in r["Disponibles"] or par in ocupados:
+                raise ValueError(f"Fila {i+2}: NRC {elegido} no disponible o repetido en el periodo.")
+            asignados[i] = str(elegido)
+            ocupados.add(par)
+        # Reservar las coincidencias forzosas antes de consumir candidatos ambiguos.
+        cambios = True
+        while cambios:
+            cambios = False
+            for r in registros:
+                i, periodo = r["Indice"], r["PERIODO"]
+                if i in asignados: continue
+                libres = [n for n in r["Disponibles"] if (periodo, n) not in ocupados]
+                if len(libres) == 1:
+                    # Si otra fila tambien solo puede usarlo, no asignar arbitrariamente.
+                    competidores = sum(1 for otro in registros if otro["Indice"] not in asignados and
+                        otro["PERIODO"] == periodo and
+                        [n for n in otro["Disponibles"] if (periodo, n) not in ocupados] == libres)
+                    if competidores == 1:
+                        asignados[i] = libres[0]
+                        ocupados.add((periodo, libres[0]))
+                        cambios = True
+        pendientes = []
+        for r in registros:
+            if r["Indice"] in asignados: continue
+            periodo = r["PERIODO"]
+            libres = [n for n in r["Disponibles"] if (periodo, n) not in ocupados]
+            estado = "Varios NRC" if len(libres) > 1 else ("NRC compartido: requiere elegir" if len(libres) == 1 else ("Todos utilizados" if r["_candidatos"] else "No encontrado"))
+            pendientes.append({k: v for k, v in r.items() if k != "_candidatos"} | {"Disponibles": libres, "Estado": estado})
+        return pd.Series([asignados.get(i, "") for i in range(len(registros))], index=df_csv.index, dtype="str"), pendientes
 
     def firma_t3(*archivos):
         return tuple((a.name, hashlib.sha256(a.getvalue()).hexdigest()) if a else None for a in archivos)
@@ -1808,14 +1890,14 @@ with tab3:
             propuestas.append({"Fila": i, "Archivo Excel": r["_ArchivoExcel"], "Fila Excel": int(r["_FilaExcel"]), "Periodo": r["PERIODO"], "Materia Excel": f'{r["SUBJ"]} {r["COURSE"]}', "Seccion Excel": r["SECCION"], "CSV sugerido": sugeridos[0] if len(sugeridos) == 1 else -1, "Coincidencias": mejor, "Estado": "Sugerencia para confirmar" if len(sugeridos) == 1 else "Revisar manualmente"})
         return asignadas, motivos, pd.DataFrame(propuestas)
 
-    def t3_generar_resultado(excel, csv, asignadas, argos_df, mapa):
+    def t3_generar_resultado(excel, csv, asignadas, argos_df, mapa, usados_previos=None, elecciones=None):
         if len(asignadas) != len(excel) or len(set(asignadas.values())) != len(asignadas):
             raise ValueError("Faltan correspondencias unicas entre Excel y CSV.")
         if len(asignadas) != len(csv): raise ValueError("El numero de filas de ALTAS y CSV no coincide. Revisa registros agregados o eliminados.")
         final, diferencias = [], []
         csv_ordenado = csv.loc[[asignadas[i] for i in excel.index]].copy().reset_index(drop=True)
-        nrc, avisos = cruzar_nrc_t3(csv_ordenado, argos_df, mapa, "CSV definitivo")
-        if nrc.eq("").any(): raise ValueError(f"ARGOS no tiene NRC unico para {int(nrc.eq('').sum())} registros. Revisa las incidencias antes de exportar: {avisos[:5]}")
+        nrc, avisos = t3_resolver_nrc(csv_ordenado, argos_df, mapa, usados_previos, elecciones)
+        if avisos: return None, pd.DataFrame(), avisos
         for i, e in excel.iterrows():
             c = csv.loc[asignadas[i]]
             registro = {k: limpiar_clave_texto(e.get(k, "")) for k in T3_COLUMNAS_FINAL if k != "NRC"}
@@ -1828,7 +1910,7 @@ with tab3:
             registro["NRC"] = nrc.iloc[i]
             registro["_ArchivoExcel"], registro["_FilaExcel"] = e["_ArchivoExcel"], int(e["_FilaExcel"])
             final.append(registro)
-        return pd.DataFrame(final), pd.DataFrame(diferencias)
+        return pd.DataFrame(final), pd.DataFrame(diferencias), []
 
     def t3_nombre_grupo(df, sufijo="CRNs Finales.xlsx"):
         def unir(xs):
@@ -1857,16 +1939,21 @@ with tab3:
         salida = st.selectbox("¿Cómo deseas recibir los Excel finales?", list(opciones), key="t3_salida")
         firma = firma_t3(*(argos or []), *(archivos_csv or []), *(archivos_excel or []))
         if st.session_state.get("t3_firma_completo") != firma:
-            for k in ("t3_match", "t3_tabla_revision", "final_argos_zip", "t3_alertas", "t3_diferencias", "t3_pendientes"):
+            for k in ("t3_match", "t3_tabla_revision", "final_argos_zip", "t3_alertas", "t3_diferencias", "t3_pendientes", "t3_nrc_pendientes", "t3_nrc_elecciones"):
                 st.session_state.pop(k, None)
             st.session_state.t3_firma_completo = firma
             st.session_state.t3_manual_version = st.session_state.get("t3_manual_version", 0) + 1
         if st.session_state.get("t3_salida_procesada") != salida:
             st.session_state.final_argos_zip = None
 
-        def t3_exportar(datos, argos_df, mapa):
+        def t3_exportar(datos, argos_df, mapa, usados_previos=None, elecciones=None):
             excel, csv, asignadas = datos["excel"], datos["csv"], datos["asignadas"]
-            final, diferencias = t3_generar_resultado(excel, csv, asignadas, argos_df, mapa)
+            final, diferencias, pendientes_nrc = t3_generar_resultado(excel, csv, asignadas, argos_df, mapa, usados_previos, elecciones)
+            if pendientes_nrc:
+                st.session_state.t3_nrc_pendientes = pendientes_nrc
+                st.session_state.final_argos_zip = None
+                return False
+            st.session_state.t3_nrc_pendientes = []
             st.session_state.t3_diferencias = diferencias
             grupos = [(k, g) for k, g in final.groupby(opciones[salida], sort=False, dropna=False)] if opciones[salida] else [(k, g) for k, g in final.groupby("_ArchivoExcel", sort=False)]
             b, rutas, macros_corregidas = io.BytesIO(), set(), 0
@@ -1903,6 +1990,7 @@ with tab3:
             st.session_state.final_argos_zip = b.getvalue()
             st.session_state.t3_salida_procesada = salida
             st.success(f"Listo: {len(grupos)} Excel finales, {len(diferencias)} cambios desde CSV y {macros_corregidas} libros con macros corregidos.")
+            return True
 
         if argos and archivos_csv and archivos_excel and st.button("🚀 Procesar y generar Excel finales con NRC", type="primary", key="t3_procesar", use_container_width=True):
             try:
@@ -1963,6 +2051,52 @@ with tab3:
                     t3_exportar(datos, argos_df, mapa)
                     st.rerun()
                 except Exception as e: st.error(f"No se pudo confirmar: {e}")
+
+        # Solicitar antecedentes solamente cuando haya coincidencias ambiguas, en cualquier nivel.
+        pendientes_nrc = st.session_state.get("t3_nrc_pendientes") or []
+        if pendientes_nrc:
+            st.subheader("⚠️ NRC pendientes de identificar")
+            st.dataframe(pd.DataFrame([{k: v for k, v in r.items() if k not in ("Disponibles", "Indice")} for r in pendientes_nrc]), hide_index=True, use_container_width=True)
+            ambiguos = [r for r in pendientes_nrc if len(r["Disponibles"]) > 1 or r["Estado"] == "NRC compartido: requiere elegir"]
+            if ambiguos:
+                periodos_necesarios = sorted({r["PERIODO"] for r in ambiguos})
+                st.warning("Hay NRC ambiguos en los periodos: " + ", ".join(periodos_necesarios) + ". Carga los Excel de CRNs previamente asignados para descartar los ya repartidos.")
+                previos = st.file_uploader("📁 CRNs ya asignados (puedes cargar varios Excel o CSV)", type=["xlsx", "xlsm", "csv"], accept_multiple_files=True, key="t3_nrc_previos")
+                if previos:
+                    try:
+                        usados_previos, detalle_previos = t3_leer_nrc_previos(previos)
+                        st.caption(f"Se identificaron {len(usados_previos)} pares PERIODO + NRC previamente asignados.")
+                        with st.expander("Ver NRC previamente asignados", expanded=False):
+                            st.dataframe(detalle_previos, hide_index=True, use_container_width=True)
+                        datos_actuales = st.session_state.get("t3_match")
+                        if datos_actuales and len(datos_actuales["asignadas"]) == len(datos_actuales["excel"]):
+                            csv_ordenado = datos_actuales["csv"].loc[[datos_actuales["asignadas"][i] for i in datos_actuales["excel"].index]].reset_index(drop=True)
+                            argos_df, mapa, avisos = t3_argos_unidos(argos)
+                            _, pendientes_despues = t3_resolver_nrc(csv_ordenado, argos_df, mapa, usados_previos)
+                            opciones_manual = [r for r in pendientes_despues if r["Disponibles"]]
+                            elecciones = {}
+                            for r in opciones_manual:
+                                elecciones[r["Indice"]] = st.selectbox(
+                                    f'Periodo {r["PERIODO"]} | {r["Nivel"]} | {r["SUBJ"]} {r["COURSE"]} | sección {r["SECCION"]} | fila {r["Fila CSV"]}',
+                                    [""] + r["Disponibles"], key=f't3_nrc_eleccion_{r["Indice"]}')
+                            sin_opciones = [r for r in pendientes_despues if not r["Disponibles"]]
+                            if sin_opciones:
+                                st.error(f"{len(sin_opciones)} registros no tienen NRC disponible; revisa los archivos previos o ARGOS.")
+                            if st.button("🔍 Revisar NRC utilizados y generar Excel finales", type="primary", key="t3_revisar_nrc", use_container_width=True):
+                                if sin_opciones or any(not n for n in elecciones.values()):
+                                    st.error("Resuelve todas las asignaciones antes de exportar.")
+                                else:
+                                    try:
+                                        seleccionados = [(next(r["PERIODO"] for r in opciones_manual if r["Indice"] == i), n) for i, n in elecciones.items()]
+                                        if len(seleccionados) != len(set(seleccionados)):
+                                            raise ValueError("Un NRC no puede asignarse dos veces en el mismo periodo.")
+                                        if t3_exportar(datos_actuales, argos_df, mapa, usados_previos, elecciones): st.rerun()
+                                        else: st.warning("Aún existen asignaciones sin resolver.")
+                                    except Exception as e: st.error(f"No se pudo resolver la asignación: {e}")
+                    except Exception as e:
+                        st.error(f"No se pudieron leer o revisar los NRC anteriores: {e}")
+            else:
+                st.warning("No hay NRC disponibles o no se encontraron coincidencias en ARGOS. Revisa los registros señalados.")
 
         if isinstance(st.session_state.get("t3_diferencias"), pd.DataFrame) and not st.session_state.t3_diferencias.empty:
             with st.expander("Cambios aplicados desde el CSV", expanded=False):
@@ -2035,246 +2169,4 @@ with tab3:
 # ============================================================
 # FIN DE PESTAÑA 3
 # ============================================================
-
-
-
-# ============================================================
-# PESTAÑA 4: CRUCES - NUEVOS, CONTINUACIÓN Y CONSOLIDADOS
-# Requiere imports y funciones de la parte inicial del Streamlit.
-# En la declaración de pestañas agrega tab4 y "3️⃣ Proceso: Cruces".
-# ============================================================
-with tab4:
-    st.header("🔗 Gestión de Cruces")
-    st.caption("Plantillas con hoja Cruces; claves AA-ZZ independientes por periodo. No se ejecutan macros.")
-    COL_COMPLETO = ["Clave", "NRC", "Tipo", "Responsable", "Periodo", "SUB", "COURSE", "Comentarios"]
-    COL_TI = ["Clave", "NRC", "Periodo"]
-    COLUMNAS_ORIGEN = ["NO_CRUCE", "PERIODO", "RESPONSABLE", "NRC", "TIPO", "CLUSTER_CRN", "SUBJ", "COURSE", "MATERIA"]
-    def t4_texto(x):
-        if x is None or pd.isna(x): return ""
-        s = str(x).strip()
-        return "" if s.lower() in ("nan", "none", "nat") else re.sub(r"\.0$", "", s)
-    def t4_normal(x):
-        return re.sub(r"\s+", " ", quitar_acentos(t4_texto(x)).upper()).strip()
-    def t4_col(x):
-        return re.sub(r"[^A-Z0-9]", "", t4_normal(x))
-    def t4_clave_num(clave):
-        c = t4_normal(clave)
-        if not re.fullmatch(r"[A-Z]{2}", c) or c < "AA" or c > "ZZ":
-            raise ValueError(f"Clave inválida: {clave}. Se admiten AA hasta ZZ.")
-        return (ord(c[0])-65)*26 + ord(c[1])-65
-    def t4_num_clave(n):
-        if not 0 <= n < 676: raise ValueError("Se agotaron las claves AA-ZZ para un periodo.")
-        return chr(65+n//26) + chr(65+n%26)
-    def t4_leer_tabla(archivo, hoja=None):
-        datos = io.BytesIO(archivo.getvalue())
-        if archivo.name.lower().endswith(".csv"):
-            ultimo = None
-            for cod in ("utf-8-sig", "cp1252"):
-                try: return pd.read_csv(io.BytesIO(archivo.getvalue()), dtype=str, keep_default_na=False, encoding=cod, sep=None, engine="python")
-                except (UnicodeError, pd.errors.ParserError) as e: ultimo = e
-            raise ValueError(f"No se pudo leer {archivo.name}: {ultimo}")
-        libro = pd.ExcelFile(datos)
-        nombre = next((h for h in libro.sheet_names if t4_col(h) == t4_col(hoja)), None) if hoja else next((h for h in libro.sheet_names if t4_col(h) in ("CRUCES", "TI")), libro.sheet_names[0])
-        if nombre is None: raise ValueError(f"{archivo.name}: falta la hoja '{hoja}'.")
-        return libro.parse(nombre, dtype=str, keep_default_na=False)
-    def t4_estandarizar(df, origen=False):
-        d = df.copy()
-        mapa = {t4_col(c): c for c in (COLUMNAS_ORIGEN if origen else COL_COMPLETO)}
-        mapa.update({"SUBJECT":"SUBJ", "AREA":"SUBJ", "CRSE":"COURSE", "NOCURSO":"COURSE"} if origen else {"SUBJ":"SUB", "SUBJECT":"SUB"})
-        d.columns = [mapa.get(t4_col(c), t4_texto(c)) for c in d.columns]
-        if d.columns.duplicated().any(): raise ValueError("Hay encabezados duplicados después de normalizarlos.")
-        oblig = COLUMNAS_ORIGEN if origen else COL_TI
-        faltan = [c for c in oblig if c not in d.columns]
-        if faltan: raise ValueError(f"Faltan columnas: {faltan}")
-        if not origen:
-            for c in COL_COMPLETO:
-                if c not in d.columns: d[c] = ""
-        for c in d.columns: d[c] = d[c].map(t4_texto)
-        return d
-    def t4_leer_nuevos(archivos):
-        piezas, nombres = [], set()
-        for pos, f in enumerate(archivos):
-            if f.name in nombres: raise ValueError(f"Hay archivos con el mismo nombre: {f.name}. Renómbralos para diferenciarlos.")
-            nombres.add(f.name)
-            d = t4_estandarizar(t4_leer_tabla(f, "Cruces"), origen=True)
-            d = d[d[["NO_CRUCE", "PERIODO", "NRC", "TIPO"]].ne("").any(axis=1)].copy()
-            d["_origen"] = f.name
-            d["_fila"] = d.index + 2
-            d["_orden_archivo"] = pos
-            piezas.append(d)
-        if not piezas: raise ValueError("No hay archivos de Cruces.")
-        return pd.concat(piezas, ignore_index=True)
-    def t4_validar_nuevos(df):
-        problemas = []
-        for i, r in df.iterrows():
-            faltan = [c for c in ("NO_CRUCE", "PERIODO", "NRC", "TIPO", "SUBJ", "COURSE") if not t4_texto(r[c])]
-            if faltan: problemas.append(f"{r['_origen']}, fila {r['_fila']}: faltan {', '.join(faltan)}.")
-            if t4_normal(r["TIPO"]) not in ("MANDANTE", "CRUCE"):
-                problemas.append(f"{r['_origen']}, fila {r['_fila']}: TIPO debe ser Mandante o Cruce.")
-            if t4_texto(r["NRC"]) and not re.fullmatch(r"\d+", t4_texto(r["NRC"])):
-                problemas.append(f"{r['_origen']}, fila {r['_fila']}: NRC no numérico.")
-        for llave, g in df.groupby(["PERIODO", "_origen", "NO_CRUCE"], sort=False):
-            mandantes = sum(g["TIPO"].map(t4_normal) == "MANDANTE")
-            hijos = sum(g["TIPO"].map(t4_normal) == "CRUCE")
-            if mandantes != 1 or hijos < 1:
-                problemas.append(f"Periodo {llave[0]}, {llave[1]}, cruce {llave[2]}: {mandantes} mandante(s), {hijos} hijo(s).")
-            if g["NRC"].duplicated().any(): problemas.append(f"Cruce {llave}: NRC repetido dentro del cruce.")
-        repetidos = df.groupby(["PERIODO", "NRC"])["NO_CRUCE"].size()
-        if (repetidos > 1).any():
-            for periodo, nrc in repetidos[repetidos > 1].index:
-                problemas.append(f"Periodo {periodo}: NRC {nrc} aparece más de una vez en las plantillas.")
-        return problemas
-    def t4_leer_anteriores(archivos):
-        completos, tis = [], []
-        for f in archivos:
-            original = t4_leer_tabla(f)
-            completo = set(t4_col(c) for c in COL_COMPLETO).issubset(set(t4_col(c) for c in original.columns))
-            d = t4_estandarizar(original)
-            d = d[d[["Clave", "NRC", "Periodo"]].ne("").any(axis=1)].copy()
-            if d[["Clave", "NRC", "Periodo"]].eq("").any().any():
-                raise ValueError(f"{f.name}: hay filas anteriores incompletas.")
-            for _, r in d.iterrows(): t4_clave_num(r["Clave"])
-            (completos if completo else tis).append(d[COL_COMPLETO if completo else COL_TI])
-        full = pd.concat(completos, ignore_index=True) if completos else pd.DataFrame(columns=COL_COMPLETO)
-        ti = pd.concat(tis + [full[COL_TI]], ignore_index=True) if tis or not full.empty else pd.DataFrame(columns=COL_TI)
-        if not ti.empty:
-            ti = ti.drop_duplicates()
-            por_nrc = ti.groupby(["Periodo", "NRC"])["Clave"].nunique()
-            if (por_nrc > 1).any(): raise ValueError("Los anteriores contienen NRC asociados a claves distintas en el mismo periodo.")
-            por_clave = ti.groupby(["Periodo", "Clave"])["NRC"].nunique()
-            if (por_clave < 2).any(): raise ValueError("Hay claves anteriores con menos de dos NRC.")
-            if not full.empty:
-                cruce = full.merge(ti, on=COL_TI, how="outer", indicator=True)
-                if (cruce["_merge"] == "left_only").any(): raise ValueError("Inconsistencia entre archivos anteriores.")
-        if not full.empty and full.duplicated(subset=COL_TI).any():
-            raise ValueError("Los anteriores completos tienen registros duplicados para la misma clave, NRC y periodo.")
-        return full.drop_duplicates(), ti
-    def t4_generar(nuevos, anteriores_full, anteriores_ti, ultimas):
-        problemas = t4_validar_nuevos(nuevos)
-        if problemas: raise ValueError("\n".join(problemas[:35]))
-        ocupados = {}
-        for _, r in anteriores_ti.iterrows():
-            p = r["Periodo"]
-            ocupados.setdefault(p, set()).add(t4_clave_num(r["Clave"]))
-        for p, ultima in ultimas.items():
-            if ultima: ocupados.setdefault(p, set()).update(range(t4_clave_num(ultima)+1))
-        prev_nrc = set(zip(anteriores_ti["Periodo"], anteriores_ti["NRC"]))
-        nuevo_nrc = set(zip(nuevos["PERIODO"], nuevos["NRC"]))
-        repetidos = prev_nrc & nuevo_nrc
-        if repetidos: raise ValueError(f"Estos NRC ya están en cruces anteriores: {sorted(repetidos)[:15]}. Revisa antes de continuar.")
-        filas = []
-        for (periodo, archivo, no), g in nuevos.groupby(["PERIODO", "_origen", "NO_CRUCE"], sort=False):
-            usadas = ocupados.setdefault(periodo, set())
-            siguiente = max(usadas, default=-1) + 1
-            if siguiente >= 676: raise ValueError(f"Periodo {periodo}: no quedan claves AA-ZZ.")
-            usadas.add(siguiente)
-            clave = t4_num_clave(siguiente)
-            g = g.assign(_tipo_orden=g["TIPO"].map(lambda x: 0 if t4_normal(x) == "MANDANTE" else 1)).sort_values(["_tipo_orden", "_fila"], kind="stable")
-            for _, r in g.iterrows():
-                filas.append({"Clave": clave, "NRC": r["NRC"], "Tipo": "Mandante" if t4_normal(r["TIPO"]) == "MANDANTE" else "Cruce",
-                             "Responsable": r["RESPONSABLE"], "Periodo": periodo, "SUB": r["SUBJ"], "COURSE": r["COURSE"], "Comentarios": ""})
-        full = pd.DataFrame(filas, columns=COL_COMPLETO)
-        ti = full[COL_TI].copy()
-        if not anteriores_ti.empty:
-            cons_ti = pd.concat([anteriores_ti, ti], ignore_index=True).drop_duplicates()
-        else: cons_ti = ti.copy()
-        cons_full = None
-        if anteriores_ti.empty: cons_full = full.copy()
-        elif not anteriores_full.empty:
-            # Solo es completo cuando todos los NRC anteriores tienen sus 8 campos.
-            cubiertos = set(map(tuple, anteriores_full[COL_TI].to_numpy()))
-            todos = set(map(tuple, anteriores_ti[COL_TI].to_numpy()))
-            if cubiertos == todos: cons_full = pd.concat([anteriores_full, full], ignore_index=True).drop_duplicates()
-        return full, ti, cons_full, cons_ti
-    def t4_excel(df, hoja):
-        salida = io.BytesIO()
-        with pd.ExcelWriter(salida, engine="openpyxl") as writer:
-            df.to_excel(writer, sheet_name=hoja, index=False)
-            ws = writer.sheets[hoja]
-            ws.freeze_panes = "A2"
-            ws.auto_filter.ref = ws.dimensions
-            for celda in ws[1]:
-                celda.font = Font(bold=True, color="FFFFFF")
-                celda.fill = PatternFill(fill_type="solid", fgColor="7030A0")
-            for col in ws.columns:
-                ancho = min(40, max(12, max(len(str(c.value or "")) for c in col)+2))
-                ws.column_dimensions[col[0].column_letter].width = ancho
-        return salida.getvalue()
-
-    if st.button("🔄 Limpiar Cruces", key="t4_limpiar"):
-        for k in list(st.session_state):
-            if k.startswith("t4_"): st.session_state.pop(k, None)
-        st.rerun()
-    st.subheader("1. Cargar plantillas")
-    archivos_nuevos = st.file_uploader("Plantillas con hoja Cruces", type=["xlsx", "xlsm"], accept_multiple_files=True, key="t4_nuevos")
-    modo_t4 = st.radio("Continuación de claves", ["Empezar en AA", "Cargar cruces anteriores", "Indicar última clave manualmente"], key="t4_modo")
-    archivos_anteriores = []
-    if modo_t4 == "Cargar cruces anteriores":
-        archivos_anteriores = st.file_uploader("Cruces anteriores: completo o TI (.xlsx, .xlsm, .csv)", type=["xlsx", "xlsm", "csv"], accept_multiple_files=True, key="t4_anteriores") or []
-    if modo_t4 == "Indicar última clave manualmente":
-        st.caption("Escribe una última clave distinta por periodo. Deja vacío si ese periodo comienza en AA.")
-    st.subheader("2. Revisar y asignar claves")
-    firma = tuple((f.name, hashlib.sha256(f.getvalue()).hexdigest()) for f in list(archivos_nuevos or []) + list(archivos_anteriores)) + (modo_t4,)
-    if modo_t4 == "Indicar última clave manualmente":
-        firma += tuple(sorted((k, v) for k, v in st.session_state.items() if k.startswith("t4_ultima_")))
-    if st.session_state.get("t4_firma") != firma:
-        st.session_state.t4_firma = firma
-        st.session_state.t4_resultados = None
-        st.session_state.t4_editor_version = st.session_state.get("t4_editor_version", 0) + 1
-    if archivos_nuevos:
-        try:
-            nuevos = t4_leer_nuevos(archivos_nuevos)
-            periodos = sorted(p for p in nuevos["PERIODO"].unique() if p)
-            ultimas = {}
-            if modo_t4 == "Indicar última clave manualmente":
-                cols = st.columns(min(3, max(1, len(periodos))))
-                for i, p in enumerate(periodos):
-                    ultimas[p] = cols[i % len(cols)].text_input(f"Última clave del periodo {p}", key=f"t4_ultima_{p}").strip().upper()
-            if modo_t4 == "Cargar cruces anteriores" and not archivos_anteriores:
-                st.info("Carga los archivos anteriores para continuar la numeración.")
-            else:
-                anteriores_full, anteriores_ti = t4_leer_anteriores(archivos_anteriores) if archivos_anteriores else (pd.DataFrame(columns=COL_COMPLETO), pd.DataFrame(columns=COL_TI))
-                if modo_t4 == "Empezar en AA" and not anteriores_ti.empty: raise ValueError("No se pueden cargar anteriores en modo AA.")
-                if st.button("🔍 Validar y generar claves", type="primary", key="t4_generar"):
-                    full, ti, cons_full, cons_ti = t4_generar(nuevos, anteriores_full, anteriores_ti, ultimas)
-                    st.session_state.t4_resultados = (full, ti, cons_full, cons_ti)
-                    st.session_state.t4_editor_version += 1
-                    st.success(f"Se asignaron {full['Clave'].groupby([full['Periodo'], full['Clave']]).ngroups} cruces nuevos.")
-        except Exception as e:
-            st.error(f"Revisión de cruces: {e}")
-    resultado = st.session_state.get("t4_resultados")
-    if resultado is not None:
-        full, ti, cons_full, cons_ti = resultado
-        st.subheader("3. Revisar resultados")
-        st.caption("Las claves y NRC no son editables para evitar romper la relación entre Mandante e hijos. Puedes editar los datos descriptivos de los nuevos cruces.")
-        with st.form("t4_edicion"):
-            editado = st.data_editor(full, hide_index=True, num_rows="fixed", use_container_width=True,
-                                     disabled=["Clave", "NRC", "Tipo", "Periodo"], key=f"t4_editor_{st.session_state.t4_editor_version}")
-            guardar = st.form_submit_button("💾 Guardar cambios")
-        if guardar:
-            full = editado.copy()
-            ti = full[COL_TI].copy()
-            if cons_full is not None:
-                anteriores = cons_full.iloc[:len(cons_full)-len(resultado[0])].copy()
-                cons_full = pd.concat([anteriores, full], ignore_index=True)
-            if len(cons_ti) >= len(resultado[1]):
-                anteriores_ti = cons_ti.iloc[:len(cons_ti)-len(resultado[1])].copy()
-                cons_ti = pd.concat([anteriores_ti, ti], ignore_index=True)
-            st.session_state.t4_resultados = (full, ti, cons_full, cons_ti)
-            st.session_state.t4_editor_version += 1
-            st.rerun()
-        salida = st.radio("¿Qué deseas descargar?", ["Solo nuevos", "Consolidado completo", "Ambas opciones"], index=2, horizontal=True, key="t4_salida")
-        archivos = {}
-        if salida in ("Solo nuevos", "Ambas opciones"):
-            archivos["Cruces_Nuevos_Completo.xlsx"] = t4_excel(full[COL_COMPLETO], "Cruces")
-            archivos["Cruces_Nuevos_TI.xlsx"] = t4_excel(ti[COL_TI], "TI")
-        if salida in ("Consolidado completo", "Ambas opciones"):
-            archivos["Cruces_Consolidado_TI.xlsx"] = t4_excel(cons_ti[COL_TI], "TI")
-            if cons_full is not None: archivos["Cruces_Consolidado_Completo.xlsx"] = t4_excel(cons_full[COL_COMPLETO], "Cruces")
-            else: st.warning("No se genera consolidado completo de 8 columnas porque los anteriores solo tienen Clave, NRC y Periodo.")
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as z:
-            for nombre, datos in archivos.items(): z.writestr(nombre, datos)
-        st.download_button("📥 Descargar cruces (.ZIP)", buffer.getvalue(), file_name="CRUCES_PROCESADOS.zip",
-                           mime="application/zip", type="primary", use_container_width=True, key="t4_descargar")
 
