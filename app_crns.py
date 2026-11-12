@@ -752,71 +752,84 @@ with tab1:
         avisos_pa = st.session_state.get("advertencias_pa") or []
         errores_reglas = st.session_state.get("errores_restricciones")
 
-        # 7.0 EDICION MANUAL DE ALTAS: conservar origen y fila, sin tocar columnas tecnicas.
-        st.divider()
-        st.subheader("✏️ Corrección manual de solicitudes ALTAS")
-        st.caption("Edita una fila o aplica cambios masivos. Guarda antes de generar. Las correcciones se reflejan en CSV, Excel y macros.")
-        campos_editables = [c for c in COLUMNAS_ALTAS_REALES if c not in ("AÑO", "CICLO", "FECHA_REGISTRO")]
-        campos_editables = list(dict.fromkeys(MAPA_COLUMNAS.get(normalizar_para_busqueda(c), c) for c in campos_editables))
-        actual = st.session_state.get("t1_altas_editadas")
-        if not isinstance(actual, pd.DataFrame):
-            actual = st.session_state.raw_altas.copy()
-            st.session_state.t1_altas_editadas = actual.copy()
-        visibles = [c for c in campos_editables if c in actual.columns]
-        filtros = st.columns(3)
-        filtro_archivo = filtros[0].selectbox("Archivo", ["Todos"] + sorted(actual["ArchivoOrigen"].dropna().unique().tolist()), key="t1_filtrar_archivo")
-        filtro_periodo = filtros[1].selectbox("Periodo", ["Todos"] + sorted(actual["Periodo"].apply(limpiar_clave_texto).unique().tolist()), key="t1_filtrar_periodo")
-        filtro_responsable = filtros[2].selectbox("Responsable", ["Todos"] + sorted(actual["Responsable"].apply(limpiar_clave_texto).unique().tolist()), key="t1_filtrar_responsable")
-        mascara = pd.Series(True, index=actual.index)
-        if filtro_archivo != "Todos": mascara &= actual["ArchivoOrigen"].eq(filtro_archivo)
-        if filtro_periodo != "Todos": mascara &= actual["Periodo"].apply(limpiar_clave_texto).eq(filtro_periodo)
-        if filtro_responsable != "Todos": mascara &= actual["Responsable"].apply(limpiar_clave_texto).eq(filtro_responsable)
-        indices_visibles = actual.index[mascara].tolist()
-        tabla = actual.loc[indices_visibles, visibles].copy().fillna("")
-        tabla.insert(0, "Seleccionar", False)
-        tabla.insert(1, "ArchivoOrigen", actual.loc[indices_visibles, "ArchivoOrigen"])
-        tabla.insert(2, "FilaExcel", actual.loc[indices_visibles, "_FilaExcel"])
-        with st.form("t1_edicion_form"):
-            editado_manual = st.data_editor(tabla, hide_index=True, num_rows="fixed", use_container_width=True,
-                disabled=["ArchivoOrigen", "FilaExcel"], key=f"t1_edicion_tabla_{st.session_state.get('t1_edicion_version', 0)}")
-            guardar_edicion = st.form_submit_button("💾 Guardar correcciones de la tabla", use_container_width=True)
-        if guardar_edicion:
-            nuevo = actual.copy()
-            for posicion, indice in enumerate(indices_visibles):
-                for campo in visibles:
-                    nuevo.at[indice, campo] = limpiar_clave_texto(editado_manual.iloc[posicion][campo])
-                if "Sección" in visibles and clave_seccion(nuevo.at[indice, "Sección"]) != clave_seccion(actual.at[indice, "Sección"]):
-                    nuevo.at[indice, "_SeccionManual"] = True
-            cambiadas = [i for i in indices_visibles if any(limpiar_clave_texto(nuevo.at[i, c]) != limpiar_clave_texto(actual.at[i, c]) for c in visibles)]
-            for i in cambiadas:
-                st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == i, "Luz Verde"] = False
-            st.session_state.t1_altas_editadas = nuevo
-            st.session_state.t1_masivo_seleccion = [indices_visibles[i] for i, v in enumerate(editado_manual["Seleccionar"]) if v]
-            st.session_state.t1_edicion_version = st.session_state.get("t1_edicion_version", 0) + 1
-            st.session_state.zip_solicitudes_csv_altas = None
-            st.rerun()
-        st.caption("Para cambios masivos, selecciona renglones en la tabla y presiona Guardar correcciones; o aplica a todos los filtrados.")
-        with st.form("t1_edicion_masiva"):
-            c1, c2, c3 = st.columns(3)
-            campo_masivo = c1.selectbox("Campo a modificar", visibles, key="t1_masivo_campo")
-            valor_masivo = c2.text_input("Nuevo valor", key="t1_masivo_valor")
-            alcance_masivo = c3.radio("Aplicar a", ["Filtrados", "Seleccionados guardados"], key="t1_masivo_aplicar")
-            aplicar_masivo = st.form_submit_button("Aplicar cambio masivo")
-        if aplicar_masivo:
-            indices_cambio = indices_visibles if alcance_masivo == "Filtrados" else [i for i in st.session_state.get("t1_masivo_seleccion", []) if i in indices_visibles]
-            if not indices_cambio: st.warning("No hay registros seleccionados para modificar.")
-            elif not limpiar_clave_texto(valor_masivo): st.warning("Escribe el valor nuevo. No se permiten cambios masivos a vacío.")
-            else:
+        with st.expander("✏️ Corrección manual de solicitudes ALTAS", expanded=False):
+            # 7.0 EDICION MANUAL DE ALTAS: conservar origen y fila, sin tocar columnas tecnicas.
+            st.caption("Edita una fila o aplica cambios masivos. Guarda antes de generar. Las correcciones se reflejan en CSV, Excel y macros.")
+            campos_editables = [c for c in COLUMNAS_ALTAS_REALES if c not in ("AÑO", "CICLO", "FECHA_REGISTRO")]
+            campos_editables = list(dict.fromkeys(MAPA_COLUMNAS.get(normalizar_para_busqueda(c), c) for c in campos_editables))
+            actual = st.session_state.get("t1_altas_editadas")
+            if not isinstance(actual, pd.DataFrame):
+                actual = st.session_state.raw_altas.copy()
+                st.session_state.t1_altas_editadas = actual.copy()
+            visibles = [c for c in campos_editables if c in actual.columns]
+            filtros = st.columns(3)
+            filtro_archivo = filtros[0].selectbox("Archivo", ["Todos"] + sorted(actual["ArchivoOrigen"].dropna().unique().tolist()), key="t1_filtrar_archivo")
+            filtro_periodo = filtros[1].selectbox("Periodo", ["Todos"] + sorted(actual["Periodo"].apply(limpiar_clave_texto).unique().tolist()), key="t1_filtrar_periodo")
+            filtro_responsable = filtros[2].selectbox("Responsable", ["Todos"] + sorted(actual["Responsable"].apply(limpiar_clave_texto).unique().tolist()), key="t1_filtrar_responsable")
+            mascara = pd.Series(True, index=actual.index)
+            if filtro_archivo != "Todos": mascara &= actual["ArchivoOrigen"].eq(filtro_archivo)
+            if filtro_periodo != "Todos": mascara &= actual["Periodo"].apply(limpiar_clave_texto).eq(filtro_periodo)
+            if filtro_responsable != "Todos": mascara &= actual["Responsable"].apply(limpiar_clave_texto).eq(filtro_responsable)
+            indices_visibles = actual.index[mascara].tolist()
+            tabla = actual.loc[indices_visibles, visibles].copy().fillna("")
+            tabla.insert(0, "Seleccionar", False)
+            tabla.insert(1, "ArchivoOrigen", actual.loc[indices_visibles, "ArchivoOrigen"])
+            tabla.insert(2, "FilaExcel", actual.loc[indices_visibles, "_FilaExcel"])
+            with st.form("t1_edicion_form"):
+                editado_manual = st.data_editor(tabla, hide_index=True, num_rows="fixed", use_container_width=True,
+                    disabled=["ArchivoOrigen", "FilaExcel"], key=f"t1_edicion_tabla_{st.session_state.get('t1_edicion_version', 0)}")
+                guardar_edicion = st.form_submit_button("💾 Guardar correcciones de la tabla", use_container_width=True)
+            if guardar_edicion:
                 nuevo = actual.copy()
-                for i in indices_cambio:
-                    nuevo.at[i, campo_masivo] = limpiar_clave_texto(valor_masivo)
-                    if campo_masivo == "Sección": nuevo.at[i, "_SeccionManual"] = True
-                for i in indices_cambio:
+                for posicion, indice in enumerate(indices_visibles):
+                    for campo in visibles:
+                        nuevo.at[indice, campo] = limpiar_clave_texto(editado_manual.iloc[posicion][campo])
+                    if "Sección" in visibles and clave_seccion(nuevo.at[indice, "Sección"]) != clave_seccion(actual.at[indice, "Sección"]):
+                        nuevo.at[indice, "_SeccionManual"] = True
+                cambiadas = [i for i in indices_visibles if any(limpiar_clave_texto(nuevo.at[i, c]) != limpiar_clave_texto(actual.at[i, c]) for c in visibles)]
+                for i in cambiadas:
                     st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == i, "Luz Verde"] = False
                 st.session_state.t1_altas_editadas = nuevo
+                st.session_state.t1_masivo_seleccion = [indices_visibles[i] for i, v in enumerate(editado_manual["Seleccionar"]) if v]
                 st.session_state.t1_edicion_version = st.session_state.get("t1_edicion_version", 0) + 1
                 st.session_state.zip_solicitudes_csv_altas = None
                 st.rerun()
+            st.caption("Para cambios masivos, selecciona renglones en la tabla y presiona Guardar correcciones; o aplica a todos los filtrados.")
+            with st.form("t1_edicion_masiva"):
+                c1, c2, c3 = st.columns(3)
+                campo_masivo = c1.selectbox("Campo a modificar", visibles, key="t1_masivo_campo")
+                valor_masivo = c2.text_input("Nuevo valor", key="t1_masivo_valor")
+                alcance_masivo = c3.radio("Aplicar a", ["Filtrados", "Seleccionados guardados"], key="t1_masivo_aplicar")
+                aplicar_masivo = st.form_submit_button("Aplicar cambio masivo")
+            if aplicar_masivo:
+                indices_cambio = indices_visibles if alcance_masivo == "Filtrados" else [i for i in st.session_state.get("t1_masivo_seleccion", []) if i in indices_visibles]
+                if not indices_cambio: st.warning("No hay registros seleccionados para modificar.")
+                elif not limpiar_clave_texto(valor_masivo): st.warning("Escribe el valor nuevo. No se permiten cambios masivos a vacío.")
+                else:
+                    nuevo = actual.copy()
+                    for i in indices_cambio:
+                        nuevo.at[i, campo_masivo] = limpiar_clave_texto(valor_masivo)
+                        if campo_masivo == "Sección": nuevo.at[i, "_SeccionManual"] = True
+                    for i in indices_cambio:
+                        st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == i, "Luz Verde"] = False
+                    st.session_state.t1_altas_editadas = nuevo
+                    st.session_state.t1_edicion_version = st.session_state.get("t1_edicion_version", 0) + 1
+                    st.session_state.zip_solicitudes_csv_altas = None
+                    st.rerun()
+            # Vista de solo lectura para copiar registros filtrados a Teams.
+            with st.expander("📋 Copiar registros filtrados", expanded=False):
+                columnas_copia = [c for c in COLUMNAS_ALTAS_REALES if MAPA_COLUMNAS.get(normalizar_para_busqueda(c), c) in actual.columns]
+                columnas_elegidas = st.multiselect("Columnas para copiar", columnas_copia,
+                    default=[c for c in ["PERIODO", "CLUSTER", "RESPONSABLE", "SUBJ", "COURSE", "NOMBRE_MATERIA", "SECCION", "TIPO_HORARIO", "METODO_EDUCATIVO", "MODO_CALIFICAR"] if c in columnas_copia],
+                    key="t1_columnas_copia")
+                if columnas_elegidas:
+                    campos_copia = [MAPA_COLUMNAS.get(normalizar_para_busqueda(c), c) for c in columnas_elegidas]
+                    para_copiar = actual.loc[indices_visibles, campos_copia].copy().fillna("")
+                    para_copiar.columns = columnas_elegidas
+                    st.dataframe(para_copiar, hide_index=True, use_container_width=True)
+                    st.code(para_copiar.to_csv(index=False, sep="\t", lineterminator="\n"), language="text")
+                else:
+                    st.info("Selecciona al menos una columna.")
         # Actualizar auditoria y avisos con datos manuales, sin perder aprobaciones anteriores de otras filas.
         catalogo_actual = cargar_catalogo_avanzado()
         auditoria_actualizada = []
