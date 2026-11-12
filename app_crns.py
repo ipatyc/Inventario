@@ -252,57 +252,62 @@ def leer_csv_pa(archivos):
 # 6. ASIGNACIÓN GLOBAL DE SECCIONES
 # ============================================================
 def asignar_secciones_globales(df_altas, pa=None):
+    # Ejecutar SOLO al finalizar la revision. No reservar secciones manuales:
+    # Licenciatura y Posgrado se numeran con el primer hueco disponible.
     requeridas = ["Periodo", "Subject", "Course", "Nivel", "Sección"]
     faltantes = [c for c in requeridas if c not in df_altas.columns]
     if faltantes: raise ValueError(f"ALTAS: faltan columnas {faltantes}")
     salida = df_altas.copy().reset_index(drop=True)
     salida["Sección Original"] = salida["Sección"].apply(clave_seccion)
     salida["Sección"] = salida["Sección Original"]
-    ocupadas, errores = {}, []
+    ocupadas, siguiente, errores = {}, {}, []
     if pa is not None:
         for _, fila in pa.iterrows():
-            llave = tuple(normalizar_para_cruce(fila[c]) for c in ["periodo", "area", "nocurso"])
+            llave = tuple(normalizar_para_cruce(fila[c]) for c in ("periodo", "area", "nocurso"))
             grupo = clave_seccion(fila["grupo"])
             if all(llave) and grupo: ocupadas.setdefault(llave, set()).add(grupo)
-    # Reservar primero las secciones fijadas manualmente, antes de asignar las automaticas.
-    bloqueadas = set()
-    if "_SeccionManual" in salida.columns:
-        for i, fila in salida.iterrows():
-            if not bool(fila.get("_SeccionManual", False)): continue
-            if normalizar_para_cruce(fila["Nivel"]) not in ("LICENCIATURA", "POSGRADO"): continue
-            llave = tuple(normalizar_para_cruce(fila[c]) for c in ["Periodo", "Subject", "Course"])
-            seccion = clave_seccion(fila["Sección"])
-            if not all(llave) or not re.fullmatch(r"(?:0[1-9]|[1-9][0-9])", seccion):
-                errores.append({"Fila": i + 1, "Tipo": "Sección manual", "Detalle": "Periodo, materia o sección manual inválidos."})
-                salida.at[i, "Sección"] = ""
-                bloqueadas.add(i)
-                continue
-            usadas = ocupadas.setdefault(llave, set())
-            if seccion in usadas:
-                errores.append({"Fila": i + 1, "Tipo": "Sección manual", "Detalle": f"Sección {seccion} ocupada en {llave}."})
-                salida.at[i, "Sección"] = ""
-            else:
-                usadas.add(seccion)
-            bloqueadas.add(i)
     for i, fila in salida.iterrows():
-        if i in bloqueadas: continue
         nivel = normalizar_para_cruce(fila["Nivel"])
-        if nivel not in ("LICENCIATURA", "POSGRADO"): continue
-        llave = tuple(normalizar_para_cruce(fila[c]) for c in ["Periodo", "Subject", "Course"])
+        if nivel not in ("LICENCIATURA", "POSGRADO"): continue  # Bachillerato: sin cambio
+        llave = tuple(normalizar_para_cruce(fila[c]) for c in ("Periodo", "Subject", "Course"))
         if not all(llave):
-            errores.append({"Fila": i + 1, "Tipo": "Sección", "Detalle": "Periodo, SUBJ o CRSE vacío."})
+            errores.append({"Fila": i + 2, "Tipo": "Sección", "Detalle": "Periodo, SUBJ o COURSE vacío."})
             salida.at[i, "Sección"] = ""
             continue
         usadas = ocupadas.setdefault(llave, set())
-        nueva = next((f"{n:02d}" for n in range(1, 100) if f"{n:02d}" not in usadas), None)
-        if nueva is None:
-            errores.append({"Fila": i + 1, "Tipo": "Sección", "Detalle": f"Sin secciones 01-99 para {llave}."})
+        numero = siguiente.get(llave, 1)
+        while numero <= 99 and f"{numero:02d}" in usadas: numero += 1
+        if numero > 99:
+            errores.append({"Fila": i + 2, "Tipo": "Sección", "Detalle": f"Sin secciones disponibles 01-99 para {llave}."})
             salida.at[i, "Sección"] = ""
         else:
-            salida.at[i, "Sección"] = nueva
-            usadas.add(nueva)
+            valor = f"{numero:02d}"
+            salida.at[i, "Sección"] = valor
+            usadas.add(valor)
+            siguiente[llave] = numero + 1
     salida["Sección Modificada"] = salida["Sección Original"] != salida["Sección"]
     return salida, pd.DataFrame(errores, columns=["Fila", "Tipo", "Detalle"])
+
+def clasificar_configuracion_pendiente(info, horario, metodo):
+    # Para una materia concreta (SUBJ + COURSE), distinguir valores ausentes de pareja ausente.
+    horario, metodo = sin_espacios(horario), sin_espacios(metodo)
+    if not horario or not metodo: return "Datos incompletos"
+    existe_h = horario in info.get("schd", set())
+    existe_m = metodo in info.get("insm", set())
+    if not existe_h and not existe_m: return "Ambos"
+    if not existe_h: return "Tipo de Horario"
+    if not existe_m: return "Método Educativo"
+    if (horario, metodo) not in info.get("pares", set()): return "Combinación"
+    return "Correcto"
+
+def firma_revision_altas(df, pa=None):
+    # Firma estable para invalidar resultados finales al cambiar datos o PA.
+    columnas = [c for c in df.columns if not c.startswith("_") and c not in ("Sección Original", "Sección Modificada")]
+    huella = hashlib.sha256()
+    huella.update(df[columnas].fillna("").astype(str).to_csv(index=False).encode("utf-8"))
+    if isinstance(pa, pd.DataFrame):
+        huella.update(pa.fillna("").astype(str).to_csv(index=False).encode("utf-8"))
+    return huella.hexdigest()
 
 # ============================================================
 # 8. RESTRICCIONES INTERNAS
@@ -507,7 +512,10 @@ ESTADOS_INICIALES = {
     "cat_pa_cache": None, "advertencias_pa": [], "errores_restricciones": None,
     "df_secciones_corregidas": None, "errores_secciones": None, "secciones_validadas": False,
     "zip_solicitudes_csv_altas": None,
-    "df_manual_fijo": None, "manual_candidatos": [], "manual_busqueda_realizada": False
+    "df_manual_fijo": None, "manual_candidatos": [], "manual_busqueda_realizada": False,
+    "t1_revision_final_firma": None, "t1_revision_final_df": None,
+    "t1_revision_final_errores": None, "t1_historial_deshacer": [],
+    "t1_resumen_cambios": None
 }
 for clave, valor in ESTADOS_INICIALES.items():
     if clave not in st.session_state: st.session_state[clave] = valor
@@ -540,7 +548,7 @@ with tab1:
                   "original_files_bytes", "cat_avanzado_cache", "cat_avanzado_firma",
                   "df_manual_fijo", "manual_candidatos", "manual_busqueda_realizada",
                   "confirmar_errores_t1", "t1_pendientes_alta", "t1_confirmar_altas",
-                  "t1_firma_archivos", "t1_catalogo", "t1_version_editor", "t1_modo_separacion", "t1_modo_generado", "t1_altas_editadas", "t1_edicion_version", "t1_masivo_campo", "t1_masivo_valor", "t1_masivo_aplicar", "t1_masivo_seleccion"]
+                  "t1_firma_archivos", "t1_catalogo", "t1_version_editor", "t1_modo_separacion", "t1_modo_generado", "t1_altas_editadas", "t1_edicion_version", "t1_masivo_campo", "t1_masivo_valor", "t1_masivo_aplicar", "t1_masivo_seleccion", "t1_historial", "t1_revision_final", "t1_revision_firma", "t1_filtro_cluster", "t1_filtro_subj", "t1_filtro_course", "t1_filtro_seccion", "t1_buscar_materia", "t1_columnas_copia"]
         claves += [k for k in st.session_state if k.startswith(("nom_t1_", "met_t1_", "manual_t1_", "t1_editor_"))]
         for k in claves: st.session_state.pop(k, None)
         st.rerun()
@@ -560,7 +568,7 @@ with tab1:
         for k in ["raw_altas", "res_auditoria", "cat_pa_cache", "advertencias_pa",
                   "errores_restricciones", "df_secciones_corregidas", "errores_secciones",
                   "zip_solicitudes_csv_altas", "original_files_bytes", "t1_pendientes_alta", "t1_catalogo",
-                  "confirmar_errores_t1", "t1_confirmar_altas", "t1_altas_editadas", "t1_masivo_seleccion"]:
+                  "confirmar_errores_t1", "t1_confirmar_altas", "t1_altas_editadas", "t1_masivo_seleccion", "t1_historial", "t1_revision_final", "t1_revision_firma"]:
             st.session_state.pop(k, None)
         st.session_state.t1_firma_archivos = firma_actual
         st.session_state.t1_version_editor = st.session_state.get("t1_version_editor", 0) + 1
@@ -642,9 +650,10 @@ with tab1:
         elif (horario, metodo) in info["pares"]:
             r["Comentario Horario"] = r["Comentario Método"] = "Combinación correcta"
         else:
-            r["Comentario Horario"] = f"Combinación {horario} + {metodo} no registrada para {subj} {crse}."
-            r["Comentario Método"] = "Pendiente de alta de combinación horario/método."
-            r["Pendientes Alta"].append(("Tipo de Horario + Método Educativo", horario, metodo, "Combinación no registrada"))
+            falta = clasificar_configuracion_pendiente(info, horario, metodo)
+            r["Comentario Horario"] = f"{horario} + {metodo}: {falta} pendiente para {subj} {crse}."
+            r["Comentario Método"] = f"Acción requerida: {falta}."
+            r["Pendientes Alta"].append((falta, horario, metodo, "Configuración no registrada"))
         if not modo:
             r["Comentario Modo de Calificar"] = "Modo de calificar vacío; revisar."
             r["Requiere Corrección"] = True
@@ -656,19 +665,12 @@ with tab1:
 
     # 5. REPORTE DE ALTAS PENDIENTES: MOSTRAR LA PAREJA COMPLETA
     def obtener_pendientes_altas(df, auditoria):
-        columnas = ["Periodo", "SUBJ", "COURSE", "Materia", "Configuración", "Tipo de Horario",
-                    "Método Educativo", "Modo de Calificar", "Motivo", "Responsable", "Archivo"]
+        columnas = ["Periodo", "Clúster", "Responsable", "SUBJ", "COURSE", "Nombre de la Materia", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "¿Qué falta?", "Archivo"]
         registros = []
         for _, r in auditoria.iterrows():
             fila = df.iloc[int(r["idx"])]
             for tipo, horario, metodo, detalle in r["Pendientes Alta"]:
-                registros.append({"Periodo": limpiar_clave_texto(fila.get("Periodo")),
-                    "SUBJ": sin_espacios(fila.get("Subject")), "COURSE": sin_espacios(fila.get("Course")),
-                    "Materia": limpiar_clave_texto(fila.get("Nombre de la Materia")), "Configuración": tipo,
-                    "Tipo de Horario": horario, "Método Educativo": metodo,
-                    "Modo de Calificar": detalle if tipo == "Modo de Calificar" else sin_espacios(fila.get("Modo de Calificar")),
-                    "Motivo": detalle if tipo != "Modo de Calificar" else "Modo de calificar no registrado",
-                    "Responsable": responsable_normalizado(fila.get("Responsable")), "Archivo": fila.get("ArchivoOrigen", "")})
+                registros.append({"Periodo": limpiar_clave_texto(fila.get("Periodo")), "Clúster": cluster_oficial(fila.get("Clúster")), "Responsable": responsable_normalizado(fila.get("Responsable")), "SUBJ": sin_espacios(fila.get("Subject")), "COURSE": sin_espacios(fila.get("Course")), "Nombre de la Materia": limpiar_clave_texto(fila.get("Nombre de la Materia")), "Tipo de Horario": horario or sin_espacios(fila.get("Tipo de Horario")), "Método Educativo": metodo or sin_espacios(fila.get("Método Educativo")), "Modo de Calificar": sin_espacios(fila.get("Modo de Calificar")), "¿Qué falta?": tipo, "Archivo": fila.get("ArchivoOrigen", "")})
         return pd.DataFrame(registros, columns=columnas)
 
     # 6. VALIDACIÓN INTELIGENTE
@@ -723,7 +725,6 @@ with tab1:
 
                 auditoria = pd.DataFrame(auditoria)
                 pendientes = obtener_pendientes_altas(total, auditoria)
-                secciones, errores_sec = asignar_secciones_globales(total, pa)
 
                 st.session_state.original_files_bytes = originales
                 st.session_state.raw_altas = total
@@ -734,8 +735,11 @@ with tab1:
                 st.session_state.t1_pendientes_alta = pendientes
                 st.session_state.advertencias_pa = avisos
                 st.session_state.errores_restricciones = auditar_restricciones_internas(total)
-                st.session_state.df_secciones_corregidas = secciones
-                st.session_state.errores_secciones = errores_sec
+                st.session_state.df_secciones_corregidas = None
+                st.session_state.errores_secciones = None
+                st.session_state.t1_revision_final = None
+                st.session_state.t1_revision_firma = None
+                st.session_state.t1_historial = []
                 st.session_state.zip_solicitudes_csv_altas = None
                 st.session_state.confirmar_errores_t1 = False
                 st.session_state.t1_confirmar_altas = False
@@ -754,7 +758,15 @@ with tab1:
 
         with st.expander("✏️ Corrección manual de solicitudes ALTAS", expanded=False):
             # 7.0 EDICION MANUAL DE ALTAS: conservar origen y fila, sin tocar columnas tecnicas.
-            st.caption("Edita una fila o aplica cambios masivos. Guarda antes de generar. Las correcciones se reflejan en CSV, Excel y macros.")
+            st.caption("Edita registros o aplica cambios masivos. Las secciones se asignarán al finalizar la revisión.")
+            if st.button("↶ Deshacer última corrección", key="t1_deshacer", disabled=not st.session_state.get("t1_historial")):
+                anterior = st.session_state.t1_historial.pop()
+                st.session_state.t1_altas_editadas = anterior
+                st.session_state.t1_revision_final = None
+                st.session_state.t1_revision_firma = None
+                st.session_state.zip_solicitudes_csv_altas = None
+                st.session_state.t1_edicion_version = st.session_state.get("t1_edicion_version", 0) + 1
+                st.rerun()
             campos_editables = [c for c in COLUMNAS_ALTAS_REALES if c not in ("AÑO", "CICLO", "FECHA_REGISTRO")]
             campos_editables = list(dict.fromkeys(MAPA_COLUMNAS.get(normalizar_para_busqueda(c), c) for c in campos_editables))
             actual = st.session_state.get("t1_altas_editadas")
@@ -766,11 +778,23 @@ with tab1:
             filtro_archivo = filtros[0].selectbox("Archivo", ["Todos"] + sorted(actual["ArchivoOrigen"].dropna().unique().tolist()), key="t1_filtrar_archivo")
             filtro_periodo = filtros[1].selectbox("Periodo", ["Todos"] + sorted(actual["Periodo"].apply(limpiar_clave_texto).unique().tolist()), key="t1_filtrar_periodo")
             filtro_responsable = filtros[2].selectbox("Responsable", ["Todos"] + sorted(actual["Responsable"].apply(limpiar_clave_texto).unique().tolist()), key="t1_filtrar_responsable")
+            f2 = st.columns(4)
+            filtro_cluster = f2[0].selectbox("Clúster", ["Todos"] + sorted(actual["Clúster"].apply(limpiar_clave_texto).unique().tolist()), key="t1_filtro_cluster")
+            filtro_subj = f2[1].selectbox("SUBJ", ["Todos"] + sorted(actual["Subject"].apply(limpiar_clave_texto).unique().tolist()), key="t1_filtro_subj")
+            filtro_course = f2[2].selectbox("COURSE", ["Todos"] + sorted(actual["Course"].apply(limpiar_clave_texto).unique().tolist()), key="t1_filtro_course")
+            filtro_seccion = f2[3].selectbox("Sección capturada", ["Todos"] + sorted(actual["Sección"].apply(clave_seccion).unique().tolist()), key="t1_filtro_seccion")
+            buscar_materia = st.text_input("Buscar nombre de materia", key="t1_buscar_materia")
             mascara = pd.Series(True, index=actual.index)
             if filtro_archivo != "Todos": mascara &= actual["ArchivoOrigen"].eq(filtro_archivo)
             if filtro_periodo != "Todos": mascara &= actual["Periodo"].apply(limpiar_clave_texto).eq(filtro_periodo)
             if filtro_responsable != "Todos": mascara &= actual["Responsable"].apply(limpiar_clave_texto).eq(filtro_responsable)
+            if filtro_cluster != "Todos": mascara &= actual["Clúster"].apply(limpiar_clave_texto).eq(filtro_cluster)
+            if filtro_subj != "Todos": mascara &= actual["Subject"].apply(limpiar_clave_texto).eq(filtro_subj)
+            if filtro_course != "Todos": mascara &= actual["Course"].apply(limpiar_clave_texto).eq(filtro_course)
+            if filtro_seccion != "Todos": mascara &= actual["Sección"].apply(clave_seccion).eq(filtro_seccion)
+            if buscar_materia.strip(): mascara &= actual["Nombre de la Materia"].apply(normalizar_para_busqueda).str.contains(normalizar_para_busqueda(buscar_materia), regex=False)
             indices_visibles = actual.index[mascara].tolist()
+            st.caption(f"{len(indices_visibles)} registros filtrados")
             tabla = actual.loc[indices_visibles, visibles].copy().fillna("")
             tabla.insert(0, "Seleccionar", False)
             tabla.insert(1, "ArchivoOrigen", actual.loc[indices_visibles, "ArchivoOrigen"])
@@ -789,6 +813,11 @@ with tab1:
                 cambiadas = [i for i in indices_visibles if any(limpiar_clave_texto(nuevo.at[i, c]) != limpiar_clave_texto(actual.at[i, c]) for c in visibles)]
                 for i in cambiadas:
                     st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == i, "Luz Verde"] = False
+                if cambiadas:
+                    st.session_state.setdefault("t1_historial", []).append(actual.copy())
+                    st.session_state.t1_historial = st.session_state.t1_historial[-10:]
+                    st.session_state.t1_revision_final = None
+                    st.session_state.t1_revision_firma = None
                 st.session_state.t1_altas_editadas = nuevo
                 st.session_state.t1_masivo_seleccion = [indices_visibles[i] for i, v in enumerate(editado_manual["Seleccionar"]) if v]
                 st.session_state.t1_edicion_version = st.session_state.get("t1_edicion_version", 0) + 1
@@ -812,24 +841,43 @@ with tab1:
                         if campo_masivo == "Sección": nuevo.at[i, "_SeccionManual"] = True
                     for i in indices_cambio:
                         st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == i, "Luz Verde"] = False
+                    st.session_state.setdefault("t1_historial", []).append(actual.copy())
+                    st.session_state.t1_historial = st.session_state.t1_historial[-10:]
+                    st.session_state.t1_revision_final = None
+                    st.session_state.t1_revision_firma = None
                     st.session_state.t1_altas_editadas = nuevo
                     st.session_state.t1_edicion_version = st.session_state.get("t1_edicion_version", 0) + 1
                     st.session_state.zip_solicitudes_csv_altas = None
                     st.rerun()
-            # Vista de solo lectura para copiar registros filtrados a Teams.
-            with st.expander("📋 Copiar registros filtrados", expanded=False):
-                columnas_copia = [c for c in COLUMNAS_ALTAS_REALES if MAPA_COLUMNAS.get(normalizar_para_busqueda(c), c) in actual.columns]
-                columnas_elegidas = st.multiselect("Columnas para copiar", columnas_copia,
-                    default=[c for c in ["PERIODO", "CLUSTER", "RESPONSABLE", "SUBJ", "COURSE", "NOMBRE_MATERIA", "SECCION", "TIPO_HORARIO", "METODO_EDUCATIVO", "MODO_CALIFICAR"] if c in columnas_copia],
-                    key="t1_columnas_copia")
-                if columnas_elegidas:
-                    campos_copia = [MAPA_COLUMNAS.get(normalizar_para_busqueda(c), c) for c in columnas_elegidas]
-                    para_copiar = actual.loc[indices_visibles, campos_copia].copy().fillna("")
-                    para_copiar.columns = columnas_elegidas
-                    st.dataframe(para_copiar, hide_index=True, use_container_width=True)
-                    st.code(para_copiar.to_csv(index=False, sep="\t", lineterminator="\n"), language="text")
-                else:
-                    st.info("Selecciona al menos una columna.")
+        # 4. TABLA PARA TEAMS Y DESCARGA CON BORDES (independiente de edición).
+        with st.expander("📋 Copiar y descargar registros para revisión", expanded=False):
+            st.caption("Usa los filtros del apartado de corrección para elegir los registros. No modifica ALTAS.")
+            columnas_copia = [c for c in COLUMNAS_ALTAS_REALES if MAPA_COLUMNAS.get(normalizar_para_busqueda(c), c) in actual.columns]
+            columnas_elegidas = st.multiselect("Columnas para compartir", columnas_copia, default=[c for c in ["PERIODO", "CLUSTER", "RESPONSABLE", "SUBJ", "COURSE", "NOMBRE_MATERIA", "SECCION", "TIPO_HORARIO", "METODO_EDUCATIVO", "MODO_CALIFICAR"] if c in columnas_copia], key="t1_columnas_copia")
+            if columnas_elegidas:
+                campos_copia = [MAPA_COLUMNAS.get(normalizar_para_busqueda(c), c) for c in columnas_elegidas]
+                para_copiar = actual.loc[indices_visibles, campos_copia].copy().fillna("")
+                para_copiar.columns = columnas_elegidas
+                st.dataframe(para_copiar, hide_index=True, use_container_width=True)
+                st.code(para_copiar.to_csv(index=False, sep="\t", lineterminator="\n"), language="text")
+                excel_copia = io.BytesIO()
+                with pd.ExcelWriter(excel_copia, engine="openpyxl") as writer:
+                    para_copiar.to_excel(writer, index=False, sheet_name="Revision")
+                    ws = writer.sheets["Revision"]
+                    ws.freeze_panes = "A2"
+                    ws.auto_filter.ref = ws.dimensions
+                    for row in ws.iter_rows():
+                        for celda in row:
+                            celda.border = openpyxl.styles.Border(left=openpyxl.styles.Side(style="thin", color="C9C9C9"), right=openpyxl.styles.Side(style="thin", color="C9C9C9"), top=openpyxl.styles.Side(style="thin", color="C9C9C9"), bottom=openpyxl.styles.Side(style="thin", color="C9C9C9"))
+                            celda.alignment = Alignment(vertical="center", wrap_text=True)
+                            if celda.row == 1:
+                                celda.fill = PatternFill(fill_type="solid", fgColor="7030A0")
+                                celda.font = Font(name="Calibri", bold=True, color="FFFFFF")
+                    for columna in ws.columns:
+                        ancho = max((len(str(c.value or "")) for c in columna), default=10)
+                        ws.column_dimensions[columna[0].column_letter].width = min(max(ancho + 3, 12), 45)
+                st.download_button("📥 Descargar Excel de registros filtrados (.xlsx)", excel_copia.getvalue(), file_name="Registros_Filtrados_Revision.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="t1_descargar_filtrados", use_container_width=True)
+            else: st.info("Selecciona al menos una columna.")
         # Actualizar auditoria y avisos con datos manuales, sin perder aprobaciones anteriores de otras filas.
         catalogo_actual = cargar_catalogo_avanzado()
         auditoria_actualizada = []
@@ -863,12 +911,10 @@ with tab1:
         st.divider()
         if not pendientes.empty:
             st.subheader("📚 Configuraciones pendientes de alta")
-            resumen_altas = pendientes.drop_duplicates(subset=["SUBJ", "COURSE", "Configuración", "Tipo de Horario", "Método Educativo", "Modo de Calificar"])
-            resumen_altas = resumen_altas.sort_values(["SUBJ", "COURSE", "Configuración"])
-            st.warning(f"Se encontraron {len(resumen_altas)} configuraciones por dar de alta.")
-
-            with st.expander("👀 Ver configuraciones pendientes", expanded=True):
-                st.dataframe(resumen_altas, hide_index=True, use_container_width=True)
+            resumen_altas = pendientes.drop_duplicates(subset=["SUBJ", "COURSE", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "¿Qué falta?"])
+            resumen_altas = resumen_altas.sort_values(["SUBJ", "COURSE", "¿Qué falta?"])
+            st.warning(f"Se encontraron {len(resumen_altas)} configuraciones por revisar.")
+            st.dataframe(resumen_altas["¿Qué falta?"].value_counts().rename_axis("Pendiente").reset_index(name="Cantidad"), hide_index=True, use_container_width=True)
 
             buffer_altas = io.BytesIO()
             with pd.ExcelWriter(buffer_altas, engine="openpyxl") as writer:
@@ -921,6 +967,8 @@ with tab1:
                                       "Método Sugerido", "Modo de Calificar Sugerido"]:
                                 auditoria.at[i, c] = editado.at[i, c]
                         st.session_state.res_auditoria = auditoria
+                        st.session_state.t1_revision_final = None
+                        st.session_state.t1_revision_firma = None
                         st.session_state.zip_solicitudes_csv_altas = None
                         st.session_state.t1_version_editor += 1
                         st.rerun()
@@ -955,25 +1003,52 @@ with tab1:
                 }.items():
                     valor = limpiar_clave_texto(f.get(origen))
                     if valor: df.at[i, destino] = valor
-            return asignar_secciones_globales(df, st.session_state.get("cat_pa_cache"))
+            return df
 
+        # 5. REVISION FINAL: calcular secciones SOLO al pulsar este boton.
         st.divider()
-        st.subheader("🔢 Secciones asignadas")
-        try:
-            df_sec, errores_sec = construir_altas_corregidas()
-            st.session_state.df_secciones_corregidas = df_sec
-            st.session_state.errores_secciones = errores_sec
-            columnas = ["ArchivoOrigen", "Periodo", "Responsable", "Subject", "Course",
-                        "Sección Original", "Sección", "Sección Modificada"]
-            with st.expander("Ver secciones asignadas"):
-                st.dataframe(df_sec[[c for c in columnas if c in df_sec.columns]],
-                             hide_index=True, use_container_width=True)
-            st.metric("Secciones modificadas", int(df_sec["Sección Modificada"].sum()))
-            if not errores_sec.empty:
-                st.error("Hay secciones que no pudieron asignarse.")
-                st.dataframe(errores_sec, hide_index=True, use_container_width=True)
-        except Exception as e:
-            st.error(f"Error al calcular secciones: {e}")
+        st.subheader("✅ Finalizar revisión y asignar secciones")
+        base_corregida = construir_altas_corregidas()
+        firma_actual_revision = firma_revision_altas(base_corregida, st.session_state.get("cat_pa_cache"))
+        if st.session_state.get("t1_revision_firma") != firma_actual_revision:
+            st.session_state.t1_revision_final = None
+            st.session_state.df_secciones_corregidas = None
+            st.session_state.zip_solicitudes_csv_altas = None
+        originales_df = st.session_state.raw_altas
+        comparables = [c for c in COLUMNAS_ALTAS if c in base_corregida.columns and c in originales_df.columns]
+        cambios_detalle = []
+        for i in base_corregida.index:
+            for c in comparables:
+                antes, despues = limpiar_clave_texto(originales_df.at[i, c]), limpiar_clave_texto(base_corregida.at[i, c])
+                if antes != despues: cambios_detalle.append({"Archivo": base_corregida.at[i, "ArchivoOrigen"], "Fila Excel": int(base_corregida.at[i, "_FilaExcel"]), "Campo": c, "Anterior": antes, "Nuevo": despues})
+        with st.expander(f"📋 Resumen de modificaciones ({len(cambios_detalle)} campos)", expanded=False):
+            if cambios_detalle: st.dataframe(pd.DataFrame(cambios_detalle), hide_index=True, use_container_width=True)
+            else: st.info("No se modificaron campos antes de asignar secciones.")
+        if st.button("✅ Finalizar revisión y asignar secciones", type="primary", key="t1_finalizar_revision", use_container_width=True):
+            try:
+                if not pendientes.empty and not st.session_state.get("t1_confirmar_altas"):
+                    raise ValueError("Confirma que revisaste las configuraciones pendientes.")
+                if hay_otras_advertencias and not st.session_state.get("confirmar_errores_t1"):
+                    raise ValueError("Confirma las advertencias pendientes.")
+                with st.spinner("Asignando secciones definitivas..."):
+                    df_sec, errores_sec = asignar_secciones_globales(base_corregida, st.session_state.get("cat_pa_cache"))
+                if not errores_sec.empty:
+                    st.session_state.errores_secciones = errores_sec
+                    raise ValueError(f"Hay {len(errores_sec)} secciones que no pudieron asignarse.")
+                st.session_state.t1_revision_final = df_sec
+                st.session_state.df_secciones_corregidas = df_sec
+                st.session_state.t1_revision_firma = firma_actual_revision
+                st.session_state.errores_secciones = errores_sec
+                st.session_state.zip_solicitudes_csv_altas = None
+                st.success(f"Revisión finalizada: {len(df_sec)} registros, {int(df_sec['Sección Modificada'].sum())} secciones ajustadas.")
+            except Exception as e: st.error(f"No se pudo finalizar: {e}")
+        revision_lista = isinstance(st.session_state.get("t1_revision_final"), pd.DataFrame) and st.session_state.get("t1_revision_firma") == firma_actual_revision
+        if revision_lista:
+            with st.expander("🔢 Ver secciones definitivas", expanded=False):
+                cols_sec = ["ArchivoOrigen", "Periodo", "Responsable", "Subject", "Course", "Sección Original", "Sección", "Sección Modificada"]
+                st.dataframe(st.session_state.t1_revision_final[[c for c in cols_sec if c in st.session_state.t1_revision_final.columns]], hide_index=True, use_container_width=True)
+        elif isinstance(st.session_state.get("errores_secciones"), pd.DataFrame) and not st.session_state.errores_secciones.empty:
+            st.dataframe(st.session_state.errores_secciones, hide_index=True, use_container_width=True)
 
         # 9. CSV BANNER: 15 COLUMNAS ORIGINALES
         def preparar_csv_banner(df):
@@ -997,59 +1072,43 @@ with tab1:
                 else cluster_oficial(f.get("Clúster")), axis=1)
             return r[COLUMNAS_CSV].fillna("").to_csv(**CSV_KWARGS_R)
 
-        # 10. GENERAR SOLICITUDES + CSV_ALTAS
+        # 6. GENERAR ARCHIVOS: utilizar exclusivamente la revision final vigente.
         st.divider()
-        st.subheader("📁 Separación de CSV_ALTAS y Excel")
-        modo_separacion = st.radio("¿Cómo deseas separar los archivos?", MODOS_SEPARACION,
-            index=3, horizontal=True, key="t1_modo_separacion")
-        st.caption("La misma separación aplica a los CSV y a los Excel normales. Las secciones ya se asignaron globalmente.")
-        if st.session_state.get("t1_modo_generado") != modo_separacion:
-            st.session_state.zip_solicitudes_csv_altas = None
-        st.subheader("📋 Vista previa de archivos")
-        try:
-            vista, _ = construir_altas_corregidas()
-            previstos, usados = [], set()
+        st.subheader("📁 Generación de CSV_ALTAS y Excel")
+        modo_separacion = st.selectbox("¿Cómo deseas separar los archivos?", MODOS_SEPARACION, index=7 if len(MODOS_SEPARACION) > 7 else 0, key="t1_modo_separacion")
+        st.caption("La misma separación aplica a CSV y Excel normales. Los originales .xlsm se devuelven solo si requieren corrección o renombrado.")
+        if st.session_state.get("t1_modo_generado") != modo_separacion: st.session_state.zip_solicitudes_csv_altas = None
+        if revision_lista:
+            vista = st.session_state.t1_revision_final
+            previstos = []
             for _, grupo in grupos_exportacion_altas(vista, modo_separacion):
-                nombre_csv = nombre_csv_grupo_altas(grupo)
-                nombre_excel = nombre_solicitud(grupo, ".xlsx") if modo_separacion != "Sin separar" else "—"
-                previstos.append({"Origen": ", ".join(grupo["ArchivoOrigen"].unique()),
-                    "CSV_ALTAS": nombre_csv, "Excel normal": nombre_excel, "Registros": len(grupo)})
-            st.dataframe(pd.DataFrame(previstos), hide_index=True, use_container_width=True)
-            st.caption("Los .xlsm originales solo se entregarán renombrados cuando su nombre no corresponda al contenido.")
-        except Exception as e:
-            st.warning(f"No se pudieron calcular los nombres: {e}")
-        if st.button("💾 Generar SOLICITUDES y CSV_ALTAS", type="primary",
-                     use_container_width=True, key="generar_salidas_t1"):
+                previstos.append({"Carpeta": "CSV_ALTAS", "Archivo": nombre_csv_grupo_altas(grupo), "Registros": len(grupo)})
+                if modo_separacion != "Sin separar": previstos.append({"Carpeta": "ALTAS_SEPARADAS", "Archivo": nombre_solicitud(grupo, ".xlsx"), "Registros": len(grupo)})
+            for origen, grupo in vista.groupby("ArchivoOrigen", sort=False):
+                if not origen.lower().endswith(".xlsm"): continue
+                esperado = nombre_solicitud(grupo, ".xlsm")
+                # Verificar cambios sin generar el libro completo para la vista previa.
+                original = st.session_state.raw_altas
+                filas_origen = original[original["ArchivoOrigen"] == origen].set_index("_FilaExcel")
+                cambiado = any(any(limpiar_clave_texto(f.get(c)) != limpiar_clave_texto(filas_origen.loc[int(f["_FilaExcel"]), c]) for c in CAMPOS_EXPORTACION_ALTAS if c in grupo.columns and c in filas_origen.columns) for _, f in grupo.iterrows())
+                nombre_mal = normalizar_para_busqueda(origen) != normalizar_para_busqueda(esperado)
+                if cambiado or nombre_mal: previstos.append({"Carpeta": "MACROS_CORREGIDAS" if cambiado else "MACROS_RENOMBRADAS", "Archivo": esperado, "Registros": len(grupo)})
+            st.caption(f"Vista previa del ZIP: {len(previstos)} archivos previstos")
+            with st.expander("📦 Ver contenido previsto del ZIP", expanded=False):
+                st.dataframe(pd.DataFrame(previstos), hide_index=True, use_container_width=True)
+        else: st.info("Primero finaliza la revisión para calcular las secciones y preparar los archivos.")
+        if st.button("💾 Generar SOLICITUDES y CSV_ALTAS", type="primary", use_container_width=True, key="generar_salidas_t1", disabled=not revision_lista):
             try:
-                if not pendientes.empty and not st.session_state.get("t1_confirmar_altas"):
-                    raise ValueError("Revisa y confirma las configuraciones pendientes de alta.")
-                if hay_otras_advertencias and not st.session_state.get("confirmar_errores_t1"):
-                    raise ValueError("Confirma las advertencias antes de continuar.")
-
-                corregido, errores = construir_altas_corregidas()
-                if not errores.empty: raise ValueError("Hay secciones sin asignar.")
-                if corregido["Periodo"].apply(limpiar_clave_texto).eq("").any():
-                    raise ValueError("Hay registros sin periodo.")
-                if corregido["Responsable"].apply(limpiar_clave_texto).eq("").any():
-                    raise ValueError("Hay registros sin responsable.")
-                if corregido["Clúster"].apply(limpiar_clave_texto).eq("").any():
-                    raise ValueError("Hay registros sin clúster; no se puede nombrar SOLICITUDES.")
-
-                with st.spinner("Generando SOLICITUDES y CSV_ALTAS..."):
-                    zip_final = generar_zip_altas(corregido, st.session_state.original_files_bytes,
-                                                  preparar_csv_banner, modo_separacion=modo_separacion)
+                with st.spinner("Generando archivos..."):
+                    zip_final = generar_zip_altas(st.session_state.t1_revision_final, st.session_state.original_files_bytes, preparar_csv_banner, modo_separacion=modo_separacion)
                 st.session_state.zip_solicitudes_csv_altas = zip_final
                 st.session_state.t1_modo_generado = modo_separacion
-                st.success("SOLICITUDES y CSV_ALTAS generados correctamente.")
+                st.success("Archivos generados correctamente.")
             except Exception as e:
                 st.session_state.zip_solicitudes_csv_altas = None
-                st.error(f"No se pudieron generar los archivos: {e}")
-
+                st.error(f"No se pudieron generar: {e}")
         if st.session_state.get("zip_solicitudes_csv_altas"):
-            st.download_button("📥 Descargar SOLICITUDES + CSV_ALTAS (.ZIP)",
-                               data=st.session_state.zip_solicitudes_csv_altas,
-                               file_name="ALTAS_PROCESADAS.zip", mime="application/zip",
-                               type="primary", use_container_width=True)
+            st.download_button("📥 Descargar SOLICITUDES + CSV_ALTAS (.ZIP)", st.session_state.zip_solicitudes_csv_altas, file_name="ALTAS_PROCESADAS.zip", mime="application/zip", type="primary", use_container_width=True)
 
     # ========================================================
     # 11. BUSCADOR Y CREACIÓN MANUAL
