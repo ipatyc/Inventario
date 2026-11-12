@@ -1448,7 +1448,7 @@ with tab1:
 # ============================================================
 with tab_err:
     st.header("⚠️ Reporte de Errores y Ensamblaje Final")
-    st.caption("Extrae las líneas rechazadas por Banner, corrígelas y reintegra cada registro en su posición original.")
+    st.caption("Un solo fragmento corregido: sirve para reenviar únicamente los errores a Banner y para reconstruir el CSV completo.")
 
     if st.button("🔄 Limpiar / Recomenzar", key="limpiar_t2"):
         claves = ["t2_base_ext", "t2_errores_ext", "t2_modo", "t2_version", "t2_base_iny", "t2_errores_iny",
@@ -1460,11 +1460,9 @@ with tab_err:
         st.rerun()
 
     # FUNCIONES AUXILIARES
-    COL_FILA_T2 = "_FILA_ORIGINAL_BANNER"
     def leer_csv_t2(archivo):
         df = pd.read_csv(io.BytesIO(archivo.getvalue()), dtype=str, encoding="utf-8-sig", keep_default_na=False, skip_blank_lines=True)
         if df.columns.duplicated().any(): raise ValueError("El CSV tiene encabezados duplicados.")
-        if COL_FILA_T2 in df.columns: raise ValueError(f"El CSV original ya contiene la columna reservada {COL_FILA_T2}.")
         return df.reset_index(drop=True)
 
     def leer_reporte_t2(archivo, cantidad):
@@ -1483,7 +1481,8 @@ with tab_err:
             except (ValueError, TypeError): invalidas.append(str(valor))
         if invalidas: raise ValueError(f"Líneas inválidas o fuera del CSV: {invalidas[:15]}")
         if not indices: raise ValueError("No se encontraron líneas válidas con errores.")
-        return list(dict.fromkeys(indices))
+        # El orden del reporte determina el orden del fragmento y su reintegración.
+        return sorted(set(indices))
 
     def nombre_base_t2(nombre):
         return re.sub(r"(?i)_(base|final|v\d+)$", "", nombre.rsplit(".", 1)[0])
@@ -1492,35 +1491,10 @@ with tab_err:
         return tuple((a.name, hashlib.sha256(a.getvalue()).hexdigest()) if a else None for a in archivos)
 
     def exportar_delta_t2(df, formato):
-        # Archivo de trabajo: conserva el identificador para el ensamblaje posterior.
         if formato == "csv": return df.to_csv(**CSV_KWARGS_R).encode("utf-8")
         buffer = io.BytesIO()
         df.to_excel(buffer, index=False, engine="openpyxl")
         return buffer.getvalue()
-
-    def csv_banner_errores_t2(df, base):
-        # Exportar solamente las filas rechazadas, con exactamente el esquema de Banner.
-        if COL_FILA_T2 not in df.columns:
-            raise ValueError("Falta el identificador interno de filas.")
-        if list(base.columns) != COLUMNAS_CSV:
-            raise ValueError("El CSV original no coincide con las 15 columnas de Banner esperadas. Revisa que sea el CSV_ALTAS de la pestaña 1.")
-        if len(df) == 0:
-            raise ValueError("No hay registros rechazados para exportar.")
-        if df.columns.duplicated().any() or set(df.columns) != set(base.columns) | {COL_FILA_T2}:
-            raise ValueError("Las columnas del fragmento no corresponden a las del CSV original.")
-        filas = pd.to_numeric(df[COL_FILA_T2], errors="coerce")
-        if filas.isna().any() or (filas % 1 != 0).any() or filas.duplicated().any():
-            raise ValueError("Hay identificadores de fila inválidos o repetidos.")
-        filas = filas.astype(int)
-        if ((filas < 2) | (filas > len(base) + 1)).any():
-            raise ValueError("Hay filas fuera del CSV original.")
-        salida = df.loc[:, list(base.columns)].copy().fillna("")
-        # Sin columna auxiliar, sin índice y con encabezados en el orden exacto.
-        contenido = salida.to_csv(**CSV_KWARGS_R).encode("utf-8")
-        verificacion = pd.read_csv(io.BytesIO(contenido), dtype=str, encoding="utf-8-sig", keep_default_na=False)
-        if list(verificacion.columns) != list(base.columns) or len(verificacion) != len(salida):
-            raise ValueError("La verificación del CSV exportado no fue satisfactoria.")
-        return contenido
 
     # 1. EXTRAER REGISTROS
     st.subheader("✂️ 1. Extraer registros con errores")
@@ -1539,7 +1513,6 @@ with tab_err:
             base = leer_csv_t2(base_ext)
             indices = leer_reporte_t2(errores_ext, len(base))
             delta = base.iloc[indices].copy().reset_index(drop=True)
-            delta.insert(0, COL_FILA_T2, [i + 2 for i in indices])
             st.session_state.t2_delta = delta.copy()
             st.session_state.t2_delta_editado = delta.copy()
             st.session_state.t2_delta_indices = indices
@@ -1553,7 +1526,7 @@ with tab_err:
     delta = st.session_state.get("t2_delta")
     if isinstance(delta, pd.DataFrame):
         st.markdown("#### 📋 Fragmento de errores")
-        st.caption(f"La columna {COL_FILA_T2} identifica la fila original. No la cambies ni la elimines al corregir fuera de Streamlit.")
+        st.caption("Conserva el orden de las filas y los encabezados. Este mismo fragmento sirve para Banner y para ensamblar el CSV completo.")
         modo = st.radio("¿Cómo deseas corregirlo?", ["Excel (.xlsx)", "CSV (.csv)", "Editar en Streamlit"], horizontal=True, key="t2_modo")
         nombre_delta = st.session_state.t2_delta_nombre
         if modo == "Excel (.xlsx)":
@@ -1565,36 +1538,23 @@ with tab_err:
         else:
             with st.form("t2_form_edicion"):
                 editado = st.data_editor(st.session_state.t2_delta_editado, hide_index=True, num_rows="fixed",
-                                         use_container_width=True, disabled=[COL_FILA_T2],
+                                         use_container_width=True,
                                          key=f"t2_editor_datos_{st.session_state.t2_editor_version}")
                 guardar = st.form_submit_button("💾 Guardar correcciones", use_container_width=True)
             if guardar:
+                if list(editado.columns) != list(st.session_state.t2_delta.columns) or len(editado) != len(st.session_state.t2_delta):
+                    raise ValueError("No se pueden alterar las columnas ni la cantidad de registros.")
                 st.session_state.t2_delta_editado = editado.copy()
                 st.session_state.t2_editor_version += 1
                 st.success("Cambios guardados correctamente.")
                 st.rerun()
-            st.caption("Para Banner descarga únicamente el CSV de registros rechazados. El fragmento para ensamblaje conserva la columna de fila original.")
-
-        # Disponible en cualquiera de los tres modos de corrección, usando siempre los cambios guardados.
-        try:
-            base_actual = leer_csv_t2(base_ext)
-            editado_actual = st.session_state.t2_delta_editado
-            datos_banner = csv_banner_errores_t2(editado_actual, base_actual)
-            st.download_button("📥 Descargar SOLO errores corregidos para Banner (.csv)",
-                               data=datos_banner, file_name=f"{nombre_delta}_BANNER.csv",
-                               mime="text/csv", use_container_width=True, key="t2_descargar_banner_errores",
-                               type="primary")
-            st.download_button("📥 Descargar fragmento para ensamblaje (.csv)",
-                               data=exportar_delta_t2(editado_actual, "csv"),
-                               file_name=f"{nombre_delta}_ENSAMBLAJE.csv", mime="text/csv",
-                               use_container_width=True, key="t2_descargar_ensamblaje")
-            st.caption(f"Banner: {len(editado_actual)} registros rechazados, {len(base_actual.columns)} columnas, sin {COL_FILA_T2}.")
-        except Exception as e:
-            st.error(f"No se puede preparar el CSV para Banner: {e}")
+            st.download_button("📥 Descargar CSV corregido (Banner y ensamblaje)", exportar_delta_t2(st.session_state.t2_delta_editado, "csv"),
+                               file_name=f"{nombre_delta}.csv", mime="text/csv", use_container_width=True)
 
     # 2. ENSAMBLAR ARCHIVO FINAL
     st.divider()
     st.subheader("💉 2. Inyectar correcciones y generar CSV final")
+    st.caption("Sube el mismo fragmento corregido de la parte 1. Se ubica cada fila por el reporte de errores, en orden ascendente de línea.")
     c1, c2, c3 = st.columns(3)
     base_iny = c1.file_uploader("📁 CSV original", type=["csv"], key="t2_base_iny")
     errores_iny = c2.file_uploader("📊 Reporte de errores", type=["xlsx"], key="t2_errores_iny")
@@ -1617,21 +1577,14 @@ with tab_err:
                                          encoding="utf-8-sig", keep_default_na=False)
             corregidas = corregidas.fillna("").reset_index(drop=True)
             if corregidas.columns.duplicated().any(): raise ValueError("El fragmento contiene encabezados duplicados.")
-            if COL_FILA_T2 not in corregidas.columns:
-                raise ValueError(f"El fragmento debe conservar {COL_FILA_T2}. Vuelve a extraerlo con esta versión de la pestaña 2.")
             if len(corregidas) != len(indices):
-                raise ValueError(f"El reporte tiene {len(indices)} líneas, pero el fragmento tiene {len(corregidas)}.")
-            if set(corregidas.columns) - {COL_FILA_T2} != set(base.columns):
-                raise ValueError("Las columnas del fragmento no coinciden con las del CSV original.")
-            numeros = pd.to_numeric(corregidas[COL_FILA_T2], errors="coerce")
-            if numeros.isna().any() or (numeros % 1 != 0).any(): raise ValueError("Hay identificadores de fila inválidos.")
-            numeros = numeros.astype(int)
-            if numeros.duplicated().any(): raise ValueError("Hay filas originales repetidas en el fragmento.")
-            esperadas = {i + 2 for i in indices}
-            if set(numeros) != esperadas: raise ValueError("Las filas identificadas no coinciden con las líneas del reporte de errores.")
+                raise ValueError(f"El reporte tiene {len(indices)} líneas distintas, pero el fragmento tiene {len(corregidas)} registros.")
+            if list(corregidas.columns) != list(base.columns):
+                raise ValueError("El fragmento debe tener exactamente los mismos encabezados y orden de columnas que el CSV original.")
+            # El fragmento se genera en orden ascendente de línea del CSV.
+            # No ordenar, insertar ni eliminar filas del fragmento durante la corrección.
             final = base.copy()
-            for j, numero in enumerate(numeros):
-                final.iloc[numero - 2] = corregidas.loc[j, list(base.columns)].to_numpy()
+            final.iloc[indices, :] = corregidas.to_numpy()
             if len(final) != len(base): raise ValueError("Cambió la cantidad de registros originales.")
             st.session_state.t2_final_bytes = final.to_csv(**CSV_KWARGS_R).encode("utf-8")
             etiqueta_segura = re.sub(r'[^a-zA-Z0-9_-]', '_', etiqueta.strip()) or "final"
