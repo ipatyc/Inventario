@@ -548,7 +548,7 @@ with tab1:
                   "original_files_bytes", "cat_avanzado_cache", "cat_avanzado_firma",
                   "df_manual_fijo", "manual_candidatos", "manual_busqueda_realizada",
                   "confirmar_errores_t1", "t1_pendientes_alta", "t1_confirmar_altas",
-                  "t1_firma_archivos", "t1_catalogo", "t1_version_editor", "t1_modo_separacion", "t1_modo_generado", "t1_altas_editadas", "t1_edicion_version", "t1_masivo_campo", "t1_masivo_valor", "t1_masivo_aplicar", "t1_masivo_seleccion", "t1_historial", "t1_revision_final", "t1_revision_firma", "t1_filtro_cluster", "t1_filtro_subj", "t1_filtro_course", "t1_filtro_seccion", "t1_buscar_materia", "t1_columnas_copia", "t1_consulta_config_pendiente", "t1_aviso_revalidacion"]
+                  "t1_firma_archivos", "t1_catalogo", "t1_version_editor", "t1_modo_separacion", "t1_modo_generado", "t1_altas_editadas", "t1_edicion_version", "t1_masivo_campo", "t1_masivo_valor", "t1_masivo_aplicar", "t1_masivo_seleccion", "t1_historial", "t1_revision_final", "t1_revision_firma", "t1_filtro_cluster", "t1_filtro_subj", "t1_filtro_course", "t1_filtro_seccion", "t1_buscar_materia", "t1_columnas_copia", "t1_consulta_config_pendiente", "t1_aviso_revalidacion", "t1_vista_pendientes", "t1_consulta_archivo", "t1_consulta_periodo", "t1_consulta_cluster", "t1_consulta_responsable", "t1_consulta_materia"]
         claves += [k for k in st.session_state if k.startswith(("nom_t1_", "met_t1_", "manual_t1_", "t1_editor_", "t1_pendientes_editor_"))]
         for k in claves: st.session_state.pop(k, None)
         st.rerun()
@@ -756,6 +756,52 @@ with tab1:
         avisos_pa = st.session_state.get("advertencias_pa") or []
         errores_reglas = st.session_state.get("errores_restricciones")
 
+        # 7.0 CONSULTA GENERAL: solo lectura, independiente de los filtros de edición.
+        with st.expander("📊 Consultar todos los registros ALTAS", expanded=False):
+            consulta = st.session_state.get("t1_altas_editadas")
+            if not isinstance(consulta, pd.DataFrame):
+                consulta = st.session_state.raw_altas
+            consulta = consulta.copy()
+            columnas_consulta = [
+                (nombre, MAPA_COLUMNAS.get(normalizar_para_busqueda(nombre), nombre))
+                for nombre in COLUMNAS_ALTAS_REALES
+            ]
+            columnas_consulta = [(nombre, real) for nombre, real in columnas_consulta if real in consulta.columns]
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Registros", len(consulta))
+            c2.metric("Archivos", consulta["ArchivoOrigen"].nunique())
+            c3.metric("Periodos", consulta["Periodo"].apply(limpiar_clave_texto).nunique())
+
+            f1, f2, f3, f4 = st.columns(4)
+            def opciones_consulta(columna):
+                return ["Todos"] + sorted(v for v in consulta[columna].apply(limpiar_clave_texto).unique() if v)
+            archivo_consulta = f1.selectbox("Archivo", opciones_consulta("ArchivoOrigen"), key="t1_consulta_archivo")
+            periodo_consulta = f2.selectbox("Periodo", opciones_consulta("Periodo"), key="t1_consulta_periodo")
+            cluster_consulta = f3.selectbox("Clúster", opciones_consulta("Clúster"), key="t1_consulta_cluster")
+            responsable_consulta = f4.selectbox("Responsable", opciones_consulta("Responsable"), key="t1_consulta_responsable")
+            materia_consulta = st.text_input("Buscar materia, SUBJ o COURSE", key="t1_consulta_materia")
+            mascara_consulta = pd.Series(True, index=consulta.index)
+            for columna, valor in [
+                ("ArchivoOrigen", archivo_consulta), ("Periodo", periodo_consulta),
+                ("Clúster", cluster_consulta), ("Responsable", responsable_consulta)
+            ]:
+                if valor != "Todos":
+                    mascara_consulta &= consulta[columna].apply(limpiar_clave_texto).eq(valor)
+            if materia_consulta.strip():
+                termino = normalizar_para_busqueda(materia_consulta)
+                mascara_consulta &= (
+                    consulta["Nombre de la Materia"].apply(normalizar_para_busqueda).str.contains(termino, regex=False)
+                    | consulta["Subject"].apply(normalizar_para_busqueda).str.contains(termino, regex=False)
+                    | consulta["Course"].apply(normalizar_para_busqueda).str.contains(termino, regex=False)
+                )
+            consulta_filtrada = consulta.loc[mascara_consulta]
+            vista_consulta = consulta_filtrada[[real for _, real in columnas_consulta]].copy().fillna("")
+            vista_consulta.columns = [nombre for nombre, _ in columnas_consulta]
+            st.caption(f"Mostrando {len(vista_consulta)} de {len(consulta)} registros. Tabla de solo lectura.")
+            st.dataframe(vista_consulta, hide_index=True, use_container_width=True, height=360)
+            if isinstance(st.session_state.get("t1_revision_final"), pd.DataFrame):
+                st.caption("Las secciones definitivas, después de finalizar la revisión, se consultan en el apartado de revisión final.")
+
         with st.expander("✏️ Corrección manual de solicitudes ALTAS", expanded=False):
             # 7.0 EDICION MANUAL DE ALTAS: conservar origen y fila, sin tocar columnas tecnicas.
             st.caption("Edita registros o aplica cambios masivos. Las secciones se asignarán al finalizar la revisión.")
@@ -916,66 +962,109 @@ with tab1:
             st.warning(f"Se encontraron {len(resumen_altas)} configuraciones por revisar.")
             st.dataframe(resumen_altas["¿Qué falta?"].value_counts().rename_axis("Pendiente").reset_index(name="Cantidad"), hide_index=True, use_container_width=True)
             with st.expander("🔎 Ver y corregir configuraciones pendientes", expanded=True):
-                # Una fila por registro ALTAS, aunque falten tanto pareja como modo de calificar.
                 pendientes_idx = sorted({int(r["idx"]) for _, r in auditoria.iterrows() if r["Pendientes Alta"]})
-                columnas_p = ["Archivo", "Fila Excel", "Periodo", "SUBJ", "COURSE", "Nombre de la Materia", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "¿Qué falta?"]
+                # Cada registro de ALTAS se muestra una sola vez, aunque tenga varias incidencias.
+                columnas_p = ["Archivo", "Fila Excel", "Periodo", "SUBJ", "COURSE", "Nombre de la Materia",
+                              "Tipo de Horario", "Método Educativo", "Modo de Calificar", "¿Qué falta?"]
                 filas_p = []
                 for idx in pendientes_idx:
                     f = actual.loc[idx]
                     rev = auditoria.loc[auditoria["idx"] == idx].iloc[0]
-                    filas_p.append({"Archivo": f["ArchivoOrigen"], "Fila Excel": int(f["_FilaExcel"]), "Periodo": limpiar_clave_texto(f["Periodo"]),
-                        "SUBJ": limpiar_clave_texto(f["Subject"]), "COURSE": limpiar_clave_texto(f["Course"]),
+                    filas_p.append({
+                        "Archivo": f["ArchivoOrigen"], "Fila Excel": int(f["_FilaExcel"]),
+                        "Periodo": limpiar_clave_texto(f["Periodo"]),
+                        "SUBJ": sin_espacios(f["Subject"]), "COURSE": sin_espacios(f["Course"]),
                         "Nombre de la Materia": limpiar_clave_texto(f["Nombre de la Materia"]),
-                        "Tipo de Horario": limpiar_clave_texto(f["Tipo de Horario"]), "Método Educativo": limpiar_clave_texto(f["Método Educativo"]),
-                        "Modo de Calificar": limpiar_clave_texto(f["Modo de Calificar"]),
-                        "¿Qué falta?": ", ".join(sorted({str(x[0]) for x in rev["Pendientes Alta"]}))})
-                tabla_p = pd.DataFrame(filas_p, index=pendientes_idx, columns=columnas_p)
+                        "Tipo de Horario": sin_espacios(f["Tipo de Horario"]),
+                        "Método Educativo": sin_espacios(f["Método Educativo"]),
+                        "Modo de Calificar": sin_espacios(f["Modo de Calificar"]),
+                        "¿Qué falta?": ", ".join(sorted({str(x[0]) for x in rev["Pendientes Alta"]}))
+                    })
+                tabla_todos = pd.DataFrame(filas_p, index=pendientes_idx, columns=columnas_p)
+                vista_p = st.radio("¿Cómo deseas revisar las configuraciones?",
+                    ["Materias únicas", "Todos los registros"], horizontal=True, key="t1_vista_pendientes")
+                columnas_clave = ["SUBJ", "COURSE", "Tipo de Horario", "Método Educativo",
+                                  "Modo de Calificar", "¿Qué falta?"]
+                if vista_p == "Materias únicas":
+                    # No unir configuraciones diferentes de una misma materia.
+                    # Cada fila representa una configuración exacta y conserva sus índices reales.
+                    grupos_p = list(tabla_todos.groupby(columnas_clave, sort=False, dropna=False))
+                    filas_unicas, indices_por_fila = [], []
+                    for _, grupo_p in grupos_p:
+                        fila_p = grupo_p.iloc[0].copy()
+                        fila_p["Registros afectados"] = len(grupo_p)
+                        filas_unicas.append(fila_p)
+                        indices_por_fila.append(grupo_p.index.tolist())
+                    columnas_unicas = ["SUBJ", "COURSE", "Nombre de la Materia", "Tipo de Horario",
+                                       "Método Educativo", "Modo de Calificar", "¿Qué falta?", "Registros afectados"]
+                    tabla_editor_p = pd.DataFrame(filas_unicas).reset_index(drop=True)[columnas_unicas]
+                    bloqueadas_p = ["SUBJ", "COURSE", "Nombre de la Materia", "¿Qué falta?", "Registros afectados"]
+                    st.caption(f"{len(tabla_editor_p)} configuraciones distintas; {len(tabla_todos)} registros afectados. "
+                               "Un cambio en esta vista se aplica a todos los registros de esa misma configuración.")
+                else:
+                    tabla_editor_p = tabla_todos.reset_index(drop=True)
+                    indices_por_fila = [[idx] for idx in pendientes_idx]
+                    bloqueadas_p = ["Archivo", "Fila Excel", "Periodo", "SUBJ", "COURSE",
+                                    "Nombre de la Materia", "¿Qué falta?"]
+                    st.caption(f"{len(tabla_editor_p)} registros afectados. Cada corrección modifica solamente su fila.")
                 with st.form("t1_form_pendientes"):
-                    ed_p = st.data_editor(tabla_p, hide_index=True, num_rows="fixed", use_container_width=True,
-                        disabled=["Archivo", "Fila Excel", "Periodo", "SUBJ", "COURSE", "Nombre de la Materia", "¿Qué falta?"],
-                        key=f"t1_pendientes_editor_{st.session_state.get('t1_edicion_version', 0)}")
-                    guardar_p = st.form_submit_button("💾 Guardar y volver a validar contra el catálogo", use_container_width=True)
+                    ed_p = st.data_editor(tabla_editor_p, hide_index=True, num_rows="fixed",
+                        use_container_width=True, disabled=bloqueadas_p,
+                        key=f"t1_pendientes_editor_{vista_p}_{st.session_state.get('t1_edicion_version', 0)}")
+                    guardar_p = st.form_submit_button("💾 Guardar y volver a validar contra el catálogo",
+                                                      use_container_width=True)
                 if guardar_p:
                     nuevo = actual.copy()
-                    afectados = []
-                    for idx in pendientes_idx:
-                        for col_tabla, col_real in [("Tipo de Horario", "Tipo de Horario"), ("Método Educativo", "Método Educativo"), ("Modo de Calificar", "Modo de Calificar")]:
-                            valor = limpiar_clave_texto(ed_p.at[idx, col_tabla])
-                            if valor != limpiar_clave_texto(actual.at[idx, col_real]):
-                                nuevo.at[idx, col_real] = valor
-                                if idx not in afectados: afectados.append(idx)
+                    afectados = set()
+                    campos_config = ["Tipo de Horario", "Método Educativo", "Modo de Calificar"]
+                    for posicion, indices_grupo in enumerate(indices_por_fila):
+                        for campo in campos_config:
+                            anterior_grupo = limpiar_clave_texto(tabla_editor_p.iloc[posicion][campo])
+                            valor_nuevo = limpiar_clave_texto(ed_p.iloc[posicion][campo])
+                            if valor_nuevo != anterior_grupo:
+                                for idx in indices_grupo:
+                                    if limpiar_clave_texto(nuevo.at[idx, campo]) != valor_nuevo:
+                                        nuevo.at[idx, campo] = valor_nuevo
+                                        afectados.add(idx)
                     if afectados:
                         st.session_state.setdefault("t1_historial", []).append(actual.copy())
                         st.session_state.t1_historial = st.session_state.t1_historial[-10:]
                         st.session_state.t1_altas_editadas = nuevo
                         for idx in afectados:
-                            st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == idx, "Luz Verde"] = False
+                            st.session_state.res_auditoria.loc[
+                                st.session_state.res_auditoria["idx"] == idx, "Luz Verde"] = False
                         st.session_state.t1_revision_final = None
                         st.session_state.t1_revision_firma = None
                         st.session_state.df_secciones_corregidas = None
                         st.session_state.zip_solicitudes_csv_altas = None
                         st.session_state.t1_confirmar_altas = False
                         st.session_state.t1_edicion_version = st.session_state.get("t1_edicion_version", 0) + 1
-                        st.session_state.t1_aviso_revalidacion = f"Se guardaron cambios en {len(afectados)} registro(s). Se volvió a consultar el Catálogo Avanzado."
+                        st.session_state.t1_aviso_revalidacion = (
+                            f"Se actualizaron {len(afectados)} registros. "
+                            "Se volvieron a comprobar las configuraciones contra el Catálogo Avanzado.")
                         st.rerun()
                     else:
                         st.info("No se detectaron cambios. Las configuraciones pendientes permanecen igual.")
-                # Consulta del catálogo: muestra solo combinaciones reales de la materia elegida.
                 if pendientes_idx:
                     seleccion_p = st.selectbox("Consultar configuraciones válidas de una materia", pendientes_idx,
-                        format_func=lambda i: f'{actual.at[i, "Subject"]} {actual.at[i, "Course"]} — {actual.at[i, "Nombre de la Materia"]} (fila {actual.at[i, "_FilaExcel"]})',
+                        format_func=lambda i: f'{actual.at[i, "Subject"]} {actual.at[i, "Course"]} — '
+                                              f'{actual.at[i, "Nombre de la Materia"]} '
+                                              f'(fila {actual.at[i, "_FilaExcel"]})',
                         key="t1_consulta_config_pendiente")
                     fila_sel = actual.loc[seleccion_p]
                     info_sel = catalogo_actual.get((sin_espacios(fila_sel["Subject"]), sin_espacios(fila_sel["Course"])))
                     if info_sel:
                         parejas = sorted(info_sel["pares"])
                         if parejas:
-                            st.dataframe(pd.DataFrame(parejas, columns=["Tipo de Horario", "Método Educativo"]), hide_index=True, use_container_width=True)
+                            st.dataframe(pd.DataFrame(parejas, columns=["Tipo de Horario", "Método Educativo"]),
+                                         hide_index=True, use_container_width=True)
                         else:
                             st.info("Esta materia no tiene parejas de horario y método registradas.")
-                        st.caption("Modos de calificar registrados: " + (", ".join(sorted(info_sel["gmod"])) or "Ninguno"))
+                        st.caption("Modos de calificar registrados: " +
+                                   (", ".join(sorted(info_sel["gmod"])) or "Ninguno"))
                     else:
-                        st.warning("SUBJ + COURSE no existe en el Catálogo Avanzado; primero revisa la materia en la Mesa de Control.")
+                        st.warning("SUBJ + COURSE no existe en el Catálogo Avanzado; "
+                                   "primero revisa la materia en la Mesa de Control.")
             buffer_altas = io.BytesIO()
             with pd.ExcelWriter(buffer_altas, engine="openpyxl") as writer:
                 resumen_altas.to_excel(writer, index=False, sheet_name="Altas_Pendientes")
