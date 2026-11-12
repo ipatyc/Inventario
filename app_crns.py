@@ -548,8 +548,8 @@ with tab1:
                   "original_files_bytes", "cat_avanzado_cache", "cat_avanzado_firma",
                   "df_manual_fijo", "manual_candidatos", "manual_busqueda_realizada",
                   "confirmar_errores_t1", "t1_pendientes_alta", "t1_confirmar_altas",
-                  "t1_firma_archivos", "t1_catalogo", "t1_version_editor", "t1_modo_separacion", "t1_modo_generado", "t1_altas_editadas", "t1_edicion_version", "t1_masivo_campo", "t1_masivo_valor", "t1_masivo_aplicar", "t1_masivo_seleccion", "t1_historial", "t1_revision_final", "t1_revision_firma", "t1_filtro_cluster", "t1_filtro_subj", "t1_filtro_course", "t1_filtro_seccion", "t1_buscar_materia", "t1_columnas_copia"]
-        claves += [k for k in st.session_state if k.startswith(("nom_t1_", "met_t1_", "manual_t1_", "t1_editor_"))]
+                  "t1_firma_archivos", "t1_catalogo", "t1_version_editor", "t1_modo_separacion", "t1_modo_generado", "t1_altas_editadas", "t1_edicion_version", "t1_masivo_campo", "t1_masivo_valor", "t1_masivo_aplicar", "t1_masivo_seleccion", "t1_historial", "t1_revision_final", "t1_revision_firma", "t1_filtro_cluster", "t1_filtro_subj", "t1_filtro_course", "t1_filtro_seccion", "t1_buscar_materia", "t1_columnas_copia", "t1_consulta_config_pendiente", "t1_aviso_revalidacion"]
+        claves += [k for k in st.session_state if k.startswith(("nom_t1_", "met_t1_", "manual_t1_", "t1_editor_", "t1_pendientes_editor_"))]
         for k in claves: st.session_state.pop(k, None)
         st.rerun()
 
@@ -568,7 +568,7 @@ with tab1:
         for k in ["raw_altas", "res_auditoria", "cat_pa_cache", "advertencias_pa",
                   "errores_restricciones", "df_secciones_corregidas", "errores_secciones",
                   "zip_solicitudes_csv_altas", "original_files_bytes", "t1_pendientes_alta", "t1_catalogo",
-                  "confirmar_errores_t1", "t1_confirmar_altas", "t1_altas_editadas", "t1_masivo_seleccion", "t1_historial", "t1_revision_final", "t1_revision_firma"]:
+                  "confirmar_errores_t1", "t1_confirmar_altas", "t1_altas_editadas", "t1_masivo_seleccion", "t1_historial", "t1_revision_final", "t1_revision_firma", "t1_aviso_revalidacion"]:
             st.session_state.pop(k, None)
         st.session_state.t1_firma_archivos = firma_actual
         st.session_state.t1_version_editor = st.session_state.get("t1_version_editor", 0) + 1
@@ -907,7 +907,7 @@ with tab1:
             avisos_pa.append({"Tipo": "PA sin cobertura", "Periodo": p, "Detalle": f"Sin PA del periodo {p}; no se conocen todas las secciones ocupadas."})
         st.session_state.advertencias_pa = avisos_pa
 
-        # 7.1 CONFIGURACIONES PENDIENTES DE ALTA
+        # 7.1 CONFIGURACIONES PENDIENTES: revisar, corregir y revalidar sin recargar ALTAS.
         st.divider()
         if not pendientes.empty:
             st.subheader("📚 Configuraciones pendientes de alta")
@@ -915,7 +915,67 @@ with tab1:
             resumen_altas = resumen_altas.sort_values(["SUBJ", "COURSE", "¿Qué falta?"])
             st.warning(f"Se encontraron {len(resumen_altas)} configuraciones por revisar.")
             st.dataframe(resumen_altas["¿Qué falta?"].value_counts().rename_axis("Pendiente").reset_index(name="Cantidad"), hide_index=True, use_container_width=True)
-
+            with st.expander("🔎 Ver y corregir configuraciones pendientes", expanded=True):
+                # Una fila por registro ALTAS, aunque falten tanto pareja como modo de calificar.
+                pendientes_idx = sorted({int(r["idx"]) for _, r in auditoria.iterrows() if r["Pendientes Alta"]})
+                columnas_p = ["Archivo", "Fila Excel", "Periodo", "SUBJ", "COURSE", "Nombre de la Materia", "Tipo de Horario", "Método Educativo", "Modo de Calificar", "¿Qué falta?"]
+                filas_p = []
+                for idx in pendientes_idx:
+                    f = actual.loc[idx]
+                    rev = auditoria.loc[auditoria["idx"] == idx].iloc[0]
+                    filas_p.append({"Archivo": f["ArchivoOrigen"], "Fila Excel": int(f["_FilaExcel"]), "Periodo": limpiar_clave_texto(f["Periodo"]),
+                        "SUBJ": limpiar_clave_texto(f["Subject"]), "COURSE": limpiar_clave_texto(f["Course"]),
+                        "Nombre de la Materia": limpiar_clave_texto(f["Nombre de la Materia"]),
+                        "Tipo de Horario": limpiar_clave_texto(f["Tipo de Horario"]), "Método Educativo": limpiar_clave_texto(f["Método Educativo"]),
+                        "Modo de Calificar": limpiar_clave_texto(f["Modo de Calificar"]),
+                        "¿Qué falta?": ", ".join(sorted({str(x[0]) for x in rev["Pendientes Alta"]}))})
+                tabla_p = pd.DataFrame(filas_p, index=pendientes_idx, columns=columnas_p)
+                with st.form("t1_form_pendientes"):
+                    ed_p = st.data_editor(tabla_p, hide_index=True, num_rows="fixed", use_container_width=True,
+                        disabled=["Archivo", "Fila Excel", "Periodo", "SUBJ", "COURSE", "Nombre de la Materia", "¿Qué falta?"],
+                        key=f"t1_pendientes_editor_{st.session_state.get('t1_edicion_version', 0)}")
+                    guardar_p = st.form_submit_button("💾 Guardar y volver a validar contra el catálogo", use_container_width=True)
+                if guardar_p:
+                    nuevo = actual.copy()
+                    afectados = []
+                    for idx in pendientes_idx:
+                        for col_tabla, col_real in [("Tipo de Horario", "Tipo de Horario"), ("Método Educativo", "Método Educativo"), ("Modo de Calificar", "Modo de Calificar")]:
+                            valor = limpiar_clave_texto(ed_p.at[idx, col_tabla])
+                            if valor != limpiar_clave_texto(actual.at[idx, col_real]):
+                                nuevo.at[idx, col_real] = valor
+                                if idx not in afectados: afectados.append(idx)
+                    if afectados:
+                        st.session_state.setdefault("t1_historial", []).append(actual.copy())
+                        st.session_state.t1_historial = st.session_state.t1_historial[-10:]
+                        st.session_state.t1_altas_editadas = nuevo
+                        for idx in afectados:
+                            st.session_state.res_auditoria.loc[st.session_state.res_auditoria["idx"] == idx, "Luz Verde"] = False
+                        st.session_state.t1_revision_final = None
+                        st.session_state.t1_revision_firma = None
+                        st.session_state.df_secciones_corregidas = None
+                        st.session_state.zip_solicitudes_csv_altas = None
+                        st.session_state.t1_confirmar_altas = False
+                        st.session_state.t1_edicion_version = st.session_state.get("t1_edicion_version", 0) + 1
+                        st.session_state.t1_aviso_revalidacion = f"Se guardaron cambios en {len(afectados)} registro(s). Se volvió a consultar el Catálogo Avanzado."
+                        st.rerun()
+                    else:
+                        st.info("No se detectaron cambios. Las configuraciones pendientes permanecen igual.")
+                # Consulta del catálogo: muestra solo combinaciones reales de la materia elegida.
+                if pendientes_idx:
+                    seleccion_p = st.selectbox("Consultar configuraciones válidas de una materia", pendientes_idx,
+                        format_func=lambda i: f'{actual.at[i, "Subject"]} {actual.at[i, "Course"]} — {actual.at[i, "Nombre de la Materia"]} (fila {actual.at[i, "_FilaExcel"]})',
+                        key="t1_consulta_config_pendiente")
+                    fila_sel = actual.loc[seleccion_p]
+                    info_sel = catalogo_actual.get((sin_espacios(fila_sel["Subject"]), sin_espacios(fila_sel["Course"])))
+                    if info_sel:
+                        parejas = sorted(info_sel["pares"])
+                        if parejas:
+                            st.dataframe(pd.DataFrame(parejas, columns=["Tipo de Horario", "Método Educativo"]), hide_index=True, use_container_width=True)
+                        else:
+                            st.info("Esta materia no tiene parejas de horario y método registradas.")
+                        st.caption("Modos de calificar registrados: " + (", ".join(sorted(info_sel["gmod"])) or "Ninguno"))
+                    else:
+                        st.warning("SUBJ + COURSE no existe en el Catálogo Avanzado; primero revisa la materia en la Mesa de Control.")
             buffer_altas = io.BytesIO()
             with pd.ExcelWriter(buffer_altas, engine="openpyxl") as writer:
                 resumen_altas.to_excel(writer, index=False, sheet_name="Altas_Pendientes")
@@ -929,16 +989,15 @@ with tab1:
                     for columna in ws.columns:
                         ancho = max((len(str(c.value)) for c in columna if c.value is not None), default=8)
                         ws.column_dimensions[columna[0].column_letter].width = min(max(ancho + 3, 12), 45)
-
             st.download_button("📥 Descargar configuraciones pendientes (.xlsx)", buffer_altas.getvalue(),
-                               file_name="Configuraciones_Pendientes_Alta.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True, key="descargar_altas_t1")
-            st.checkbox("Ya revisé las configuraciones pendientes y deseo continuar con advertencia",
-                        key="t1_confirmar_altas")
-            st.caption("Si actualizas el Catálogo Avanzado y vuelves a validar, las configuraciones existentes desaparecerán.")
+                file_name="Configuraciones_Pendientes_Alta.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True, key="descargar_altas_t1")
+            st.checkbox("Ya revisé las configuraciones pendientes y deseo continuar con advertencia", key="t1_confirmar_altas")
+            st.caption("Al corregir y guardar, los pendientes se recalculan. Si una configuración es nueva, puedes conservarla y continuar con advertencia.")
         else:
             st.success("No hay configuraciones pendientes de alta.")
+        if st.session_state.get("t1_aviso_revalidacion"):
+            st.success(st.session_state.pop("t1_aviso_revalidacion"))
 
         # 7.2 UNA SOLA MESA DE CONTROL; SOLO ERRORES QUE REQUIEREN CORRECCIÓN
         corregibles = auditoria[auditoria["Requiere Corrección"] == True].copy()
