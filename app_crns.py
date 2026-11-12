@@ -533,7 +533,6 @@ tab1, tab_err, tab3, tab4 = st.tabs([
     "2️⃣ Proceso: Inyección de NRCs Masiva (ARGOS)",
     "3️⃣ Proceso: Gestión de Cruces"
 ])
-
 # ============================================================
 # PESTAÑA 1: VALIDACIÓN, CONFIGURACIONES Y GENERACIÓN
 # ============================================================
@@ -924,19 +923,13 @@ with tab1:
                         ws.column_dimensions[columna[0].column_letter].width = min(max(ancho + 3, 12), 45)
                 st.download_button("📥 Descargar Excel de registros filtrados (.xlsx)", excel_copia.getvalue(), file_name="Registros_Filtrados_Revision.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="t1_descargar_filtrados", use_container_width=True)
             else: st.info("Selecciona al menos una columna.")
-        # Actualizar auditoria y avisos con datos manuales, sin perder aprobaciones anteriores de otras filas.
+        # Auditoría derivada exclusivamente de los valores guardados en ALTAS.
+        # Las sugerencias antiguas nunca se reaplican sobre correcciones nuevas.
         catalogo_actual = cargar_catalogo_avanzado()
         auditoria_actualizada = []
         for i, fila in actual.iterrows():
             revision = validar_materia(fila, catalogo_actual)
             revision.update({"idx": i, "Archivo": fila["ArchivoOrigen"]})
-            anterior = auditoria[auditoria["idx"] == i]
-            if not anterior.empty and bool(anterior.iloc[0]["Luz Verde"]):
-                prev = anterior.iloc[0]
-                revision["Luz Verde"] = True
-                for c in ["Subj Sugerido", "Crse Sugerido", "Horario Sugerido", "Método Sugerido", "Modo de Calificar Sugerido"]:
-                    if limpiar_clave_texto(prev[c]) != limpiar_clave_texto(prev[c.replace("Sugerido", "Original")]):
-                        revision[c] = prev[c]
             auditoria_actualizada.append(revision)
         auditoria = pd.DataFrame(auditoria_actualizada)
         st.session_state.res_auditoria = auditoria
@@ -1109,15 +1102,36 @@ with tab1:
                             disabled=bloqueadas, key=f"t1_editor_{hashlib.md5(archivo.encode()).hexdigest()[:10]}_{st.session_state.t1_version_editor}")
                         guardar = st.form_submit_button("💾 Guardar correcciones", use_container_width=True)
                     if guardar:
+                        # Aplicar las aprobaciones directamente a la fuente única.
+                        # No guardar sugerencias para sobrescribirlas después.
+                        nuevo = st.session_state.t1_altas_editadas.copy()
+                        cambios_aprobados = set()
+                        equivalencias_aprobadas = {
+                            "Subject": "Subj Sugerido", "Course": "Crse Sugerido",
+                            "Tipo de Horario": "Horario Sugerido",
+                            "Método Educativo": "Método Sugerido",
+                            "Modo de Calificar": "Modo de Calificar Sugerido"
+                        }
                         for i in sub.index:
-                            auditoria.at[i, "Luz Verde"] = bool(editado.at[i, "Luz Verde"])
-                            for c in ["Subj Sugerido", "Crse Sugerido", "Horario Sugerido",
-                                      "Método Sugerido", "Modo de Calificar Sugerido"]:
-                                auditoria.at[i, c] = editado.at[i, c]
-                        st.session_state.res_auditoria = auditoria
-                        st.session_state.t1_revision_final = None
-                        st.session_state.t1_revision_firma = None
-                        st.session_state.zip_solicitudes_csv_altas = None
+                            if not bool(editado.at[i, "Luz Verde"]):
+                                continue
+                            idx_real = int(auditoria.at[i, "idx"])
+                            for destino, origen in equivalencias_aprobadas.items():
+                                valor = limpiar_clave_texto(editado.at[i, origen])
+                                if valor and valor != limpiar_clave_texto(nuevo.at[idx_real, destino]):
+                                    nuevo.at[idx_real, destino] = valor
+                                    cambios_aprobados.add(idx_real)
+                        if cambios_aprobados:
+                            st.session_state.setdefault("t1_historial", []).append(st.session_state.t1_altas_editadas.copy())
+                            st.session_state.t1_historial = st.session_state.t1_historial[-10:]
+                            st.session_state.t1_altas_editadas = nuevo
+                            st.session_state.t1_revision_final = None
+                            st.session_state.t1_revision_firma = None
+                            st.session_state.df_secciones_corregidas = None
+                            st.session_state.zip_solicitudes_csv_altas = None
+                            st.session_state.t1_confirmar_altas = False
+                            st.session_state.t1_edicion_version = st.session_state.get("t1_edicion_version", 0) + 1
+                            st.session_state.t1_aviso_revalidacion = f"Se guardaron {len(cambios_aprobados)} registros de Mesa de Control."
                         st.session_state.t1_version_editor += 1
                         st.rerun()
 
@@ -1140,18 +1154,9 @@ with tab1:
 
         # 8. CORRECCIONES Y SECCIONES AUTOMÁTICAS
         def construir_altas_corregidas():
-            df = st.session_state.get("t1_altas_editadas", st.session_state.raw_altas).copy()
-            aprobadas = st.session_state.res_auditoria
-            for _, f in aprobadas[aprobadas["Luz Verde"] == True].iterrows():
-                i = int(f["idx"])
-                for destino, origen in {
-                    "Subject": "Subj Sugerido", "Course": "Crse Sugerido",
-                    "Tipo de Horario": "Horario Sugerido", "Método Educativo": "Método Sugerido",
-                    "Modo de Calificar": "Modo de Calificar Sugerido"
-                }.items():
-                    valor = limpiar_clave_texto(f.get(origen))
-                    if valor: df.at[i, destino] = valor
-            return df
+            # Fuente única: todos los editores guardan aquí.
+            # No aplicar sugerencias pendientes ni aprobaciones antiguas.
+            return st.session_state.t1_altas_editadas.copy()
 
         # 5. REVISION FINAL: calcular secciones SOLO al pulsar este boton.
         st.divider()
@@ -1169,6 +1174,12 @@ with tab1:
             for c in comparables:
                 antes, despues = limpiar_clave_texto(originales_df.at[i, c]), limpiar_clave_texto(base_corregida.at[i, c])
                 if antes != despues: cambios_detalle.append({"Archivo": base_corregida.at[i, "ArchivoOrigen"], "Fila Excel": int(base_corregida.at[i, "_FilaExcel"]), "Campo": c, "Anterior": antes, "Nuevo": despues})
+        # Vista de la fuente que se exportará, antes de asignar secciones.
+        with st.expander("🔍 Verificar valores guardados antes de exportar", expanded=False):
+            columnas_verificacion = ["ArchivoOrigen", "_FilaExcel", "Periodo", "Subject", "Course",
+                                     "Tipo de Horario", "Método Educativo", "Modo de Calificar"]
+            st.dataframe(base_corregida[[c for c in columnas_verificacion if c in base_corregida.columns]],
+                         hide_index=True, use_container_width=True)
         with st.expander(f"📋 Resumen de modificaciones ({len(cambios_detalle)} campos)", expanded=False):
             if cambios_detalle: st.dataframe(pd.DataFrame(cambios_detalle), hide_index=True, use_container_width=True)
             else: st.info("No se modificaron campos antes de asignar secciones.")
@@ -1431,6 +1442,7 @@ with tab1:
 
 
 
+
 # ============================================================
 # PESTAÑA 2: REPORTE DE ERRORES Y ENSAMBLAJE FINAL
 # ============================================================
@@ -1480,10 +1492,35 @@ with tab_err:
         return tuple((a.name, hashlib.sha256(a.getvalue()).hexdigest()) if a else None for a in archivos)
 
     def exportar_delta_t2(df, formato):
+        # Archivo de trabajo: conserva el identificador para el ensamblaje posterior.
         if formato == "csv": return df.to_csv(**CSV_KWARGS_R).encode("utf-8")
         buffer = io.BytesIO()
         df.to_excel(buffer, index=False, engine="openpyxl")
         return buffer.getvalue()
+
+    def csv_banner_errores_t2(df, base):
+        # Exportar solamente las filas rechazadas, con exactamente el esquema de Banner.
+        if COL_FILA_T2 not in df.columns:
+            raise ValueError("Falta el identificador interno de filas.")
+        if list(base.columns) != COLUMNAS_CSV:
+            raise ValueError("El CSV original no coincide con las 15 columnas de Banner esperadas. Revisa que sea el CSV_ALTAS de la pestaña 1.")
+        if len(df) == 0:
+            raise ValueError("No hay registros rechazados para exportar.")
+        if df.columns.duplicated().any() or set(df.columns) != set(base.columns) | {COL_FILA_T2}:
+            raise ValueError("Las columnas del fragmento no corresponden a las del CSV original.")
+        filas = pd.to_numeric(df[COL_FILA_T2], errors="coerce")
+        if filas.isna().any() or (filas % 1 != 0).any() or filas.duplicated().any():
+            raise ValueError("Hay identificadores de fila inválidos o repetidos.")
+        filas = filas.astype(int)
+        if ((filas < 2) | (filas > len(base) + 1)).any():
+            raise ValueError("Hay filas fuera del CSV original.")
+        salida = df.loc[:, list(base.columns)].copy().fillna("")
+        # Sin columna auxiliar, sin índice y con encabezados en el orden exacto.
+        contenido = salida.to_csv(**CSV_KWARGS_R).encode("utf-8")
+        verificacion = pd.read_csv(io.BytesIO(contenido), dtype=str, encoding="utf-8-sig", keep_default_na=False)
+        if list(verificacion.columns) != list(base.columns) or len(verificacion) != len(salida):
+            raise ValueError("La verificación del CSV exportado no fue satisfactoria.")
+        return contenido
 
     # 1. EXTRAER REGISTROS
     st.subheader("✂️ 1. Extraer registros con errores")
@@ -1536,8 +1573,24 @@ with tab_err:
                 st.session_state.t2_editor_version += 1
                 st.success("Cambios guardados correctamente.")
                 st.rerun()
-            st.download_button("📥 Descargar fragmento corregido", exportar_delta_t2(st.session_state.t2_delta_editado, "csv"),
-                               file_name=f"{nombre_delta}.csv", mime="text/csv", use_container_width=True)
+            st.caption("Para Banner descarga únicamente el CSV de registros rechazados. El fragmento para ensamblaje conserva la columna de fila original.")
+
+        # Disponible en cualquiera de los tres modos de corrección, usando siempre los cambios guardados.
+        try:
+            base_actual = leer_csv_t2(base_ext)
+            editado_actual = st.session_state.t2_delta_editado
+            datos_banner = csv_banner_errores_t2(editado_actual, base_actual)
+            st.download_button("📥 Descargar SOLO errores corregidos para Banner (.csv)",
+                               data=datos_banner, file_name=f"{nombre_delta}_BANNER.csv",
+                               mime="text/csv", use_container_width=True, key="t2_descargar_banner_errores",
+                               type="primary")
+            st.download_button("📥 Descargar fragmento para ensamblaje (.csv)",
+                               data=exportar_delta_t2(editado_actual, "csv"),
+                               file_name=f"{nombre_delta}_ENSAMBLAJE.csv", mime="text/csv",
+                               use_container_width=True, key="t2_descargar_ensamblaje")
+            st.caption(f"Banner: {len(editado_actual)} registros rechazados, {len(base_actual.columns)} columnas, sin {COL_FILA_T2}.")
+        except Exception as e:
+            st.error(f"No se puede preparar el CSV para Banner: {e}")
 
     # 2. ENSAMBLAR ARCHIVO FINAL
     st.divider()
@@ -1595,6 +1648,9 @@ with tab_err:
 # ============================================================
 # FIN DE PESTAÑA 2
 # ============================================================
+
+
+
 # ============================================================
 # PESTAÑA 3: ARGOS, CRUCE RAPIDO E INYECCION SEGURA DE NRC
 # ============================================================
