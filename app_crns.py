@@ -2179,10 +2179,10 @@ with tab3:
 with tab4:
     st.header("🔗 Gestión de Cruces")
     st.caption("Plantillas con hoja Cruces; claves AA-ZZ independientes por periodo. No se ejecutan macros.")
-    COL_COMPLETO = ["Clave", "NRC", "Tipo", "Responsable", "Periodo", "Cluster", "SUB", "COURSE", "Comentarios"]
-    COL_COMPLETO_ANTERIOR = [c for c in COL_COMPLETO if c != "Cluster"]
+    COL_COMPLETO = ["Clave", "NRC", "Tipo", "Responsable", "Periodo", "Cluster", "SUB", "COURSE", "CAPACIDAD_CRUCE", "Comentarios"]
+    COL_COMPLETO_ANTERIOR = [c for c in COL_COMPLETO if c not in ("Cluster", "CAPACIDAD_CRUCE")]
     COL_TI = ["Clave", "NRC", "Periodo"]
-    COLUMNAS_ORIGEN = ["NO_CRUCE", "PERIODO", "RESPONSABLE", "NRC", "TIPO", "CLUSTER_CRN", "SUBJ", "COURSE", "MATERIA"]
+    COLUMNAS_ORIGEN = ["NO_CRUCE", "PERIODO", "RESPONSABLE", "NRC", "TIPO", "CLUSTER_CRN", "SUBJ", "COURSE", "MATERIA", "CAPACIDAD_CRUCE"]
     def t4_texto(x):
         if x is None or pd.isna(x): return ""
         s = str(x).strip()
@@ -2217,6 +2217,7 @@ with tab4:
         mapa.update({"SUBJECT":"SUBJ", "AREA":"SUBJ", "CRSE":"COURSE", "NOCURSO":"COURSE"} if origen else {"SUBJ":"SUB", "SUBJECT":"SUB"})
         d.columns = [mapa.get(t4_col(c), t4_texto(c)) for c in d.columns]
         if d.columns.duplicated().any(): raise ValueError("Hay encabezados duplicados después de normalizarlos.")
+        # CAPACIDAD_CRUCE es obligatoria en plantillas nuevas; historicos pueden no tenerla.
         oblig = COLUMNAS_ORIGEN if origen else COL_TI
         faltan = [c for c in oblig if c not in d.columns]
         if faltan: raise ValueError(f"Faltan columnas: {faltan}")
@@ -2253,6 +2254,11 @@ with tab4:
             if mandantes != 1 or hijos < 1:
                 problemas.append(f"Periodo {llave[0]}, {llave[1]}, cruce {llave[2]}: {mandantes} mandante(s), {hijos} hijo(s).")
             if g["NRC"].duplicated().any(): problemas.append(f"Cruce {llave}: NRC repetido dentro del cruce.")
+            mand = g[g["TIPO"].map(t4_normal) == "MANDANTE"]
+            if len(mand) == 1:
+                cap = t4_texto(mand.iloc[0]["CAPACIDAD_CRUCE"])
+                if not cap or not re.fullmatch(r"\d+", cap) or int(cap) <= 0:
+                    problemas.append(f"Periodo {llave[0]}, {llave[1]}, cruce {llave[2]}: CAPACIDAD_CRUCE del Mandante debe ser un entero positivo.")
         repetidos = df.groupby(["PERIODO", "NRC"])["NO_CRUCE"].size()
         if (repetidos > 1).any():
             for periodo, nrc in repetidos[repetidos > 1].index:
@@ -2310,7 +2316,7 @@ with tab4:
             g = g.assign(_tipo_orden=g["TIPO"].map(lambda x: 0 if t4_normal(x) == "MANDANTE" else 1)).sort_values(["_tipo_orden", "_fila"], kind="stable")
             for _, r in g.iterrows():
                 filas.append({"Clave": clave, "NRC": r["NRC"], "Tipo": "Mandante" if t4_normal(r["TIPO"]) == "MANDANTE" else "Cruce",
-                             "Responsable": r["RESPONSABLE"], "Periodo": periodo, "Cluster": r["CLUSTER_CRN"], "SUB": r["SUBJ"], "COURSE": r["COURSE"], "Comentarios": ""})
+                             "Responsable": r["RESPONSABLE"], "Periodo": periodo, "Cluster": r["CLUSTER_CRN"], "SUB": r["SUBJ"], "COURSE": r["COURSE"], "CAPACIDAD_CRUCE": r["CAPACIDAD_CRUCE"], "Comentarios": ""})
         full = pd.DataFrame(filas, columns=COL_COMPLETO)
         ti = full[COL_TI].copy()
         if not anteriores_ti.empty:
@@ -2319,7 +2325,7 @@ with tab4:
         cons_full = None
         if anteriores_ti.empty: cons_full = full.copy()
         elif not anteriores_full.empty:
-            # Solo es completo cuando todos los NRC anteriores tienen sus 8 campos.
+            # Solo es completo cuando todos los NRC anteriores tienen sus campos descriptivos.
             cubiertos = set(map(tuple, anteriores_full[COL_TI].to_numpy()))
             todos = set(map(tuple, anteriores_ti[COL_TI].to_numpy()))
             if cubiertos == todos: cons_full = pd.concat([anteriores_full, full], ignore_index=True).drop_duplicates()
@@ -2424,5 +2430,6 @@ with tab4:
             for nombre, datos in archivos.items(): z.writestr(nombre, datos)
         st.download_button("📥 Descargar cruces (.ZIP)", buffer.getvalue(), file_name=f"CRUCES_PROCESADOS_{fecha_corta}.zip",
                            mime="application/zip", type="primary", use_container_width=True, key="t4_descargar")
+
 
 
