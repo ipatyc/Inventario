@@ -2179,7 +2179,8 @@ with tab3:
 with tab4:
     st.header("🔗 Gestión de Cruces")
     st.caption("Plantillas con hoja Cruces; claves AA-ZZ independientes por periodo. No se ejecutan macros.")
-    COL_COMPLETO = ["Clave", "NRC", "Tipo", "Responsable", "Periodo", "SUB", "COURSE", "Comentarios"]
+    COL_COMPLETO = ["Clave", "NRC", "Tipo", "Responsable", "Periodo", "Cluster", "SUB", "COURSE", "Comentarios"]
+    COL_COMPLETO_ANTERIOR = [c for c in COL_COMPLETO if c != "Cluster"]
     COL_TI = ["Clave", "NRC", "Periodo"]
     COLUMNAS_ORIGEN = ["NO_CRUCE", "PERIODO", "RESPONSABLE", "NRC", "TIPO", "CLUSTER_CRN", "SUBJ", "COURSE", "MATERIA"]
     def t4_texto(x):
@@ -2256,12 +2257,16 @@ with tab4:
         if (repetidos > 1).any():
             for periodo, nrc in repetidos[repetidos > 1].index:
                 problemas.append(f"Periodo {periodo}: NRC {nrc} aparece más de una vez en las plantillas.")
+        # No separar un mismo cruce entre responsables diferentes.
+        for (periodo, archivo, no), g in df.groupby(["PERIODO", "_origen", "NO_CRUCE"], sort=False):
+            if g["RESPONSABLE"].map(t4_normal).nunique() > 1:
+                problemas.append(f"Periodo {periodo}, {archivo}, cruce {no}: hay responsables diferentes dentro del mismo cruce.")
         return problemas
     def t4_leer_anteriores(archivos):
         completos, tis = [], []
         for f in archivos:
             original = t4_leer_tabla(f)
-            completo = set(t4_col(c) for c in COL_COMPLETO).issubset(set(t4_col(c) for c in original.columns))
+            completo = set(t4_col(c) for c in COL_COMPLETO_ANTERIOR).issubset(set(t4_col(c) for c in original.columns))
             d = t4_estandarizar(original)
             d = d[d[["Clave", "NRC", "Periodo"]].ne("").any(axis=1)].copy()
             if d[["Clave", "NRC", "Periodo"]].eq("").any().any():
@@ -2305,7 +2310,7 @@ with tab4:
             g = g.assign(_tipo_orden=g["TIPO"].map(lambda x: 0 if t4_normal(x) == "MANDANTE" else 1)).sort_values(["_tipo_orden", "_fila"], kind="stable")
             for _, r in g.iterrows():
                 filas.append({"Clave": clave, "NRC": r["NRC"], "Tipo": "Mandante" if t4_normal(r["TIPO"]) == "MANDANTE" else "Cruce",
-                             "Responsable": r["RESPONSABLE"], "Periodo": periodo, "SUB": r["SUBJ"], "COURSE": r["COURSE"], "Comentarios": ""})
+                             "Responsable": r["RESPONSABLE"], "Periodo": periodo, "Cluster": r["CLUSTER_CRN"], "SUB": r["SUBJ"], "COURSE": r["COURSE"], "Comentarios": ""})
         full = pd.DataFrame(filas, columns=COL_COMPLETO)
         ti = full[COL_TI].copy()
         if not anteriores_ti.empty:
@@ -2398,16 +2403,26 @@ with tab4:
             st.rerun()
         salida = st.radio("¿Qué deseas descargar?", ["Solo nuevos", "Consolidado completo", "Ambas opciones"], index=2, horizontal=True, key="t4_salida")
         archivos = {}
+        from zoneinfo import ZoneInfo
+        fecha_corta = datetime.datetime.now(ZoneInfo("America/Monterrey")).strftime("%Y%m%d")
+        def t4_nombre_seguro(valor):
+            return re.sub(r"[\\/:*?\"<>|]", "", t4_texto(valor)).strip() or "Sin Responsable"
         if salida in ("Solo nuevos", "Ambas opciones"):
-            archivos["Cruces_Nuevos_Completo.xlsx"] = t4_excel(full[COL_COMPLETO], "Cruces")
-            archivos["Cruces_Nuevos_TI.xlsx"] = t4_excel(ti[COL_TI], "TI")
+            # Los nuevos se separan por periodo y responsable, preservando cruces completos.
+            for (periodo, responsable), grupo in full.groupby(["Periodo", "Responsable"], sort=False, dropna=False):
+                base = f"{t4_nombre_seguro(periodo)} Cruces {t4_nombre_seguro(responsable)}"
+                archivos[f"{base}.xlsx"] = t4_excel(grupo[COL_COMPLETO], "Cruces")
+                archivos[f"{base} TI.xlsx"] = t4_excel(grupo[COL_TI], "TI")
         if salida in ("Consolidado completo", "Ambas opciones"):
-            archivos["Cruces_Consolidado_TI.xlsx"] = t4_excel(cons_ti[COL_TI], "TI")
-            if cons_full is not None: archivos["Cruces_Consolidado_Completo.xlsx"] = t4_excel(cons_full[COL_COMPLETO], "Cruces")
-            else: st.warning("No se genera consolidado completo de 8 columnas porque los anteriores solo tienen Clave, NRC y Periodo.")
+            archivos[f"Cruces_Consolidado_TI_{fecha_corta}.xlsx"] = t4_excel(cons_ti[COL_TI], "TI")
+            if cons_full is not None:
+                archivos[f"Cruces_Consolidado_Completo_{fecha_corta}.xlsx"] = t4_excel(cons_full[COL_COMPLETO], "Cruces")
+            else:
+                st.warning("No se genera consolidado completo porque los archivos anteriores no incluyen todas las columnas descriptivas; el consolidado TI sí se genera.")
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as z:
             for nombre, datos in archivos.items(): z.writestr(nombre, datos)
-        st.download_button("📥 Descargar cruces (.ZIP)", buffer.getvalue(), file_name="CRUCES_PROCESADOS.zip",
+        st.download_button("📥 Descargar cruces (.ZIP)", buffer.getvalue(), file_name=f"CRUCES_PROCESADOS_{fecha_corta}.zip",
                            mime="application/zip", type="primary", use_container_width=True, key="t4_descargar")
+
 
